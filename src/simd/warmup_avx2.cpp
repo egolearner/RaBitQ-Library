@@ -9,7 +9,6 @@ namespace rabitqlib::simd {
 
 // Helper: AVX2 64-bit Popcount; Mula's method
 static inline __m256i popcount_avx2(__m256i v) {
-#if defined(__AVX2__)
     // Lookup table for population count of 0-15
     const __m256i lookup = _mm256_setr_epi8(
         0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4,
@@ -30,10 +29,6 @@ static inline __m256i popcount_avx2(__m256i v) {
 
     // Sum bytes horizontally into 64-bit integers (SAD against 0)
     return _mm256_sad_epu8(cnt_bytes, _mm256_setzero_si256());
-#else
-    std::cerr << "AVX2 is required for popcount_avx2\n";
-    exit(1);
-#endif
 }
 
 float warmup_ip_x0_q_512_avx2(
@@ -44,63 +39,6 @@ float warmup_ip_x0_q_512_avx2(
     size_t padded_dim,
     size_t b_query
 ) {
-#if defined(__AVX512VPOPCNTDQ__) && defined(__AVX512BW__)
-    size_t ip_scalar = 0;
-    size_t ppc_scalar = 0;
-
-    __m512i acc_ip = _mm512_setzero_si512();
-    __m512i acc_ppc = _mm512_setzero_si512();
-
-    size_t i = 0;
-    size_t dim_end_512 = (padded_dim / 512) * 512;
-
-    __m512i acc_bits[b_query];
-    for (size_t j = 0; j < b_query; ++j) {
-        acc_bits[j] = _mm512_setzero_si512();
-    }
-
-    for (; i < dim_end_512; i += 512) {
-        __m512i data_vec = _mm512_loadu_si512(data);
-        data += 8;
-
-        acc_ppc = _mm512_add_epi64(acc_ppc, _mm512_popcnt_epi64(data_vec));
-
-        for (size_t j = 0; j < b_query; ++j) {
-            __m512i query_vec = _mm512_loadu_si512(query);
-            query += 8;
-
-            __m512i pop = _mm512_popcnt_epi64(_mm512_and_si512(data_vec, query_vec));
-            acc_bits[j] = _mm512_add_epi64(acc_bits[j], pop);
-        }
-    }
-
-    size_t remaining_dim = padded_dim - i;
-    if (remaining_dim > 0) {
-        size_t num_chunks = remaining_dim / 64;
-        auto valid_mask = static_cast<__mmask8>((1u << num_chunks) - 1u);
-
-        __m512i data_vec = _mm512_maskz_loadu_epi64(valid_mask, data);
-        acc_ppc = _mm512_add_epi64(acc_ppc, _mm512_popcnt_epi64(data_vec));
-
-        for (size_t j = 0; j < b_query; ++j) {
-            __m512i query_vec = _mm512_maskz_loadu_epi64(valid_mask, query);
-            query += num_chunks;
-
-            __m512i pop = _mm512_popcnt_epi64(_mm512_and_si512(data_vec, query_vec));
-            acc_bits[j] = _mm512_add_epi64(acc_bits[j], pop);
-        }
-    }
-
-    for (size_t j = 0; j < b_query; ++j) {
-        __m128i shift = _mm_cvtsi32_si128(static_cast<int>(j));
-        acc_ip = _mm512_add_epi64(acc_ip, _mm512_sll_epi64(acc_bits[j], shift));
-    }
-
-    ip_scalar += static_cast<size_t>(_mm512_reduce_add_epi64(acc_ip));
-    ppc_scalar += static_cast<size_t>(_mm512_reduce_add_epi64(acc_ppc));
-
-    return (delta * static_cast<float>(ip_scalar)) + (vl * static_cast<float>(ppc_scalar));
-#elif defined(__AVX2__)
     size_t ip_scalar = 0;
     size_t ppc_scalar = 0;
 
@@ -197,10 +135,7 @@ float warmup_ip_x0_q_512_avx2(
     ppc_scalar += mm256_reduce_add_epi64(acc_ppc);
 
     return (delta * static_cast<float>(ip_scalar)) + (vl * static_cast<float>(ppc_scalar));
-#else
-    std::cerr << "AVX512 VPOPCNTDQ and AVX512BW or AVX2 are required for warmup_ip_x0_q_512\n";
-    exit(1);
-#endif
+
 }
 
 

@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace rabitqlib {
+
 float warmup_ip_x0_q_512(
     const uint64_t* data,
     const uint64_t* query,
@@ -42,6 +44,8 @@ inline float warmup_ip_x0_q(
 
     return (delta * static_cast<float>(ip)) + (vl * static_cast<float>(ppc));
 }
+
+}  // namespace rabitqlib
 
 template <uint32_t b_query, uint32_t padded_dim>
 inline float warmup_ip_x0_q(

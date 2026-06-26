@@ -1,7 +1,6 @@
 // HNSW is developed from the [HNSW library](https://github.com/nmslib/hnswlib)
 #pragma once
 
-#include <immintrin.h>
 #include <omp.h>
 
 #include <atomic>

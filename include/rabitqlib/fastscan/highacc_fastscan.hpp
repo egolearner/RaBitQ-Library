@@ -1,7 +1,5 @@
 #pragma once
 
-#include <immintrin.h>
-
 #include <cassert>
 #include <cstdint>
 #include <cstdio>

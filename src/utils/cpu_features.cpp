@@ -1,15 +1,12 @@
 #include "rabitqlib/utils/cpu_features.hpp"
 
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 namespace rabitqlib::cpu {
 namespace {
-
-bool env_is_enabled(const char* name) {
-    const char* value = std::getenv(name);
-    return value != nullptr && std::strcmp(value, "0") != 0;
-}
 
 Features detect_features() {
     Features detected{};
@@ -25,13 +22,13 @@ Features detect_features() {
 #endif
 #endif
 
-    if (env_is_enabled("RABITQ_DISABLE_AVX512")) {
+    if (env_flag_enabled("RABITQ_DISABLE_AVX512")) {
         detected.avx512f = false;
         detected.avx512bw = false;
         detected.avx512dq = false;
         detected.avx512vpopcntdq = false;
     }
-    if (env_is_enabled("RABITQ_DISABLE_AVX2")) {
+    if (env_flag_enabled("RABITQ_DISABLE_AVX2")) {
         detected.avx2 = false;
         detected.fma = false;
     }
@@ -43,6 +40,21 @@ Features detect_features() {
 const Features& features() {
     static const Features detected = detect_features();
     return detected;
+}
+
+bool env_flag_enabled(const char* name) {
+    const char* value = std::getenv(name);
+    if (value == nullptr) {
+        return false;
+    }
+
+    std::string normalized;
+    for (const char* it = value; *it != '\0'; ++it) {
+        normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(*it))));
+    }
+
+    return !normalized.empty() && normalized != "0" && normalized != "false" &&
+           normalized != "no" && normalized != "off";
 }
 
 bool has_avx2() {

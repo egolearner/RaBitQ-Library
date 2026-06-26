@@ -3,8 +3,7 @@
 
 #pragma once
 
-#include <immintrin.h>
-
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstdint>

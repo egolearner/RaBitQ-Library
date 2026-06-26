@@ -1,8 +1,6 @@
 #include <immintrin.h>
 
 #include <cstdint>
-#include <cstdlib>
-#include <iostream>
 
 #include "rabitqlib/utils/space.hpp"
 
@@ -11,34 +9,6 @@ namespace rabitqlib::simd {
 void new_transpose_bin_avx2(
     const uint16_t* q, uint64_t* tq, size_t padded_dim, size_t b_query
 ) {
-    // Easy
-#if defined(__AVX512BW__)
-    // 512 / 16 = 32
-    for (size_t i = 0; i < padded_dim; i += 64) {
-        __m512i vec_00_to_31 = _mm512_loadu_si512(q);
-        __m512i vec_32_to_63 = _mm512_loadu_si512(q + 32);
-
-        // the first (16 - b_query) bits are empty
-        vec_00_to_31 = _mm512_slli_epi32(vec_00_to_31, (16 - b_query));
-        vec_32_to_63 = _mm512_slli_epi32(vec_32_to_63, (16 - b_query));
-
-        for (size_t j = 0; j < b_query; ++j) {
-            uint32_t v0 = _mm512_movepi16_mask(vec_00_to_31);  // get most significant bit
-            uint32_t v1 = _mm512_movepi16_mask(vec_32_to_63);  // get most significant bit
-            // [TODO: remove all reverse_bits]
-            v0 = reverse_bits(v0);
-            v1 = reverse_bits(v1);
-            uint64_t v = (static_cast<uint64_t>(v0) << 32) + v1;
-
-            tq[b_query - j - 1] = v;
-
-            vec_00_to_31 = _mm512_slli_epi16(vec_00_to_31, 1);
-            vec_32_to_63 = _mm512_slli_epi16(vec_32_to_63, 1);
-        }
-        tq += b_query;
-        q += 64;
-    }
-#elif defined(__AVX2__)
     for (size_t i = 0; i < padded_dim; i += 64) {
         __m256i vec_00_to_15 = _mm256_loadu_si256((__m256i const*)(q));
         __m256i vec_16_to_31 = _mm256_loadu_si256((__m256i const*)(q + 16));
@@ -82,40 +52,11 @@ void new_transpose_bin_avx2(
         tq += b_query;
         q += 64;
     }
-#else
-    std::cerr << "AVX512 or AVX2 is required for new transpose bin\n";
-    exit(1);
-#endif
 }
 
 void new_transpose_bin_512_avx2(
     const uint8_t* q, uint64_t* tq, size_t padded_dim, size_t b_query
 ) {
-#if defined(__AVX512BW__)
-    // Keep full 512-dim blocks as 8 chunks, but store the tail as compact
-    // [b_query x num_chunks] so runtime can use maskz loads without query padding.
-    for (size_t i = 0; i < padded_dim;) {
-        size_t block_size = 512;
-        if (i + 512 > padded_dim) {
-            block_size = padded_dim - i;
-        }
-        size_t num_chunks = block_size / 64;
-
-        for (size_t k = 0; k < num_chunks; ++k) {
-            const uint8_t* current_q = q + i + k * 64;
-            __m512i vec = _mm512_loadu_si512(current_q);
-
-            for (size_t j = 0; j < b_query; ++j) {
-                int bit_idx = b_query - 1 - j;
-                __mmask64 m = _mm512_test_epi8_mask(vec, _mm512_set1_epi8(1 << bit_idx));
-                tq[(b_query - j - 1) * num_chunks + k] = reverse_bits_u64(static_cast<uint64_t>(m));
-            }
-        }
-
-        i += block_size;
-        tq += num_chunks * b_query;
-    }
-#elif defined(__AVX2__)
     for (size_t i = 0; i < padded_dim;) {
         size_t block_size = 512;
         if (i + 512 > padded_dim) {
@@ -157,52 +98,12 @@ void new_transpose_bin_512_avx2(
         i += block_size;
         tq += num_chunks * b_query;
     }
-#else
-    std::cerr << "AVX512BW or AVX2 is required for new_transpose_bin_512\n";
-    exit(1);
-#endif
 }
 
 float mask_ip_x0_q_avx2(const float* query, const uint64_t* data, size_t padded_dim) {
     const size_t num_blk = padded_dim / 64;
     const uint64_t* it_data = data;
     const float* it_query = query;
-// Easier
-#if defined(__AVX512F__)
-
-    //    __m512 sum0 = _mm512_setzero_ps();
-    //    __m512 sum1 = _mm512_setzero_ps();
-    //    __m512 sum2 = _mm512_setzero_ps();
-    //    __m512 sum3 = _mm512_setzero_ps();
-
-    __m512 sum = _mm512_setzero_ps();
-    for (size_t i = 0; i < num_blk; ++i) {
-        uint64_t bits = reverse_bits_u64(*it_data);
-
-        auto mask0 = static_cast<__mmask16>(bits);
-        auto mask1 = static_cast<__mmask16>(bits >> 16);
-        auto mask2 = static_cast<__mmask16>(bits >> 32);
-        auto mask3 = static_cast<__mmask16>(bits >> 48);
-
-        __m512 masked0 = _mm512_maskz_loadu_ps(mask0, it_query);
-        __m512 masked1 = _mm512_maskz_loadu_ps(mask1, it_query + 16);
-        __m512 masked2 = _mm512_maskz_loadu_ps(mask2, it_query + 32);
-        __m512 masked3 = _mm512_maskz_loadu_ps(mask3, it_query + 48);
-
-        sum = _mm512_add_ps(sum, masked0);
-        sum = _mm512_add_ps(sum, masked1);
-        sum = _mm512_add_ps(sum, masked2);
-        sum = _mm512_add_ps(sum, masked3);
-
-        //         _mm_prefetch(reinterpret_cast<const char*>(it_query + 128), _MM_HINT_T1);
-
-        ++it_data;
-        it_query += 64;
-    }
-
-    //    __m512 sum = _mm512_add_ps(_mm512_add_ps(sum0, sum1), _mm512_add_ps(sum2, sum3));
-    return _mm512_reduce_add_ps(sum);
-#elif defined(__AVX2__)
 
     __m256 sum = _mm256_setzero_ps();
 
@@ -233,11 +134,6 @@ float mask_ip_x0_q_avx2(const float* query, const uint64_t* data, size_t padded_
         result += reinterpret_cast<float*>(&sum)[i];
     }
     return result;
-#else
-    std::cerr << "AVX512 or AVX2 is required for mask ip x0 q\n";
-    exit(1);
-#endif
-    return 0.0F;
 }
 
 }  // namespace rabitqlib::simd

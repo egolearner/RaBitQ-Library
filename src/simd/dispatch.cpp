@@ -1,8 +1,8 @@
 #include "rabitqlib/simd/dispatch.hpp"
 
 #include <array>
-#include <cstdlib>
-#include <iostream>
+#include <stdexcept>
+#include <string>
 
 #include "rabitqlib/simd/space_dispatch.hpp"
 #include "rabitqlib/simd/fastscan_dispatch.hpp"
@@ -17,8 +17,7 @@ namespace rabitqlib::simd {
 namespace {
 
 [[noreturn]] void missing_feature(const char* feature_name) {
-    std::cerr << feature_name << " requires AVX2/FMA or AVX512 support\n";
-    std::exit(1);
+    throw std::runtime_error(std::string(feature_name) + " requires AVX2/FMA or AVX512 support");
 }
 
 }  // namespace
@@ -40,6 +39,7 @@ ExcodeIpTable resolve_excode_ip_table() {
             excode_ipimpl::ip64_fxu5_avx512,
             excode_ipimpl::ip64_fxu6_avx512,
             excode_ipimpl::ip64_fxu7_avx512,
+            // 8-bit codes are already byte-aligned, so the generic float/int IP path is used.
             rabitqlib::excode_ipimpl::ip_fxi<float, uint8_t>,
         };
     }
@@ -54,6 +54,7 @@ ExcodeIpTable resolve_excode_ip_table() {
             excode_ipimpl::ip64_fxu5_avx2,
             excode_ipimpl::ip64_fxu6_avx2,
             excode_ipimpl::ip64_fxu7_avx2,
+            // 8-bit codes are already byte-aligned, so the generic float/int IP path is used.
             rabitqlib::excode_ipimpl::ip_fxi<float, uint8_t>,
         };
     }
@@ -95,8 +96,7 @@ ex_ipfunc select_excode_ipfunc(size_t ex_bits) {
         return table[ex_bits];
     }
 
-    std::cerr << "Bad IP function for IVF\n";
-    exit(1);
+    throw std::invalid_argument("Bad IP function for IVF");
 }
 
 float excode_ipimpl::ip16_fxu1_avx(
@@ -240,6 +240,8 @@ void accumulate_hacc(
 
 }  // namespace rabitqlib::fastscan
 
+namespace rabitqlib {
+
 float warmup_ip_x0_q_512(
     const uint64_t* data,
     const uint64_t* query,
@@ -258,3 +260,5 @@ float warmup_ip_x0_q_512(
     }();
     return fn(data, query, delta, vl, padded_dim, b_query);
 }
+
+}  // namespace rabitqlib
