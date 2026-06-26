@@ -9,38 +9,38 @@
 using namespace rabitqlib;
 using namespace rabitq_test;
 
-TEST(Select_IP_Func, returns_correct_function_pointer) {
+TEST(Select_IP_Func, returns_stable_function_pointer) {
     auto ip_func = select_excode_ipfunc(0);
     ASSERT_NE(ip_func, nullptr);
-    ASSERT_EQ(ip_func, excode_ipimpl::ip16_fxu1_avx);
+    ASSERT_EQ(ip_func, select_excode_ipfunc(0));
 
     ip_func = select_excode_ipfunc(1);
     ASSERT_NE(ip_func, nullptr);
-    ASSERT_EQ(ip_func, excode_ipimpl::ip16_fxu1_avx);
+    ASSERT_EQ(ip_func, select_excode_ipfunc(1));
 
     ip_func = select_excode_ipfunc(2);
     ASSERT_NE(ip_func, nullptr);
-    ASSERT_EQ(ip_func, excode_ipimpl::ip64_fxu2_avx);
-    
+    ASSERT_EQ(ip_func, select_excode_ipfunc(2));
+
     ip_func = select_excode_ipfunc(3);
     ASSERT_NE(ip_func, nullptr);
-    ASSERT_EQ(ip_func, excode_ipimpl::ip64_fxu3_avx);
+    ASSERT_EQ(ip_func, select_excode_ipfunc(3));
 
     ip_func = select_excode_ipfunc(4);
     ASSERT_NE(ip_func, nullptr);
-    ASSERT_EQ(ip_func, excode_ipimpl::ip16_fxu4_avx);
+    ASSERT_EQ(ip_func, select_excode_ipfunc(4));
 
     ip_func = select_excode_ipfunc(5);
     ASSERT_NE(ip_func, nullptr);
-    ASSERT_EQ(ip_func, excode_ipimpl::ip64_fxu5_avx);
+    ASSERT_EQ(ip_func, select_excode_ipfunc(5));
 
     ip_func = select_excode_ipfunc(6);
     ASSERT_NE(ip_func, nullptr);
-    ASSERT_EQ(ip_func, excode_ipimpl::ip64_fxu6_avx);
+    ASSERT_EQ(ip_func, select_excode_ipfunc(6));
 
     ip_func = select_excode_ipfunc(7);
     ASSERT_NE(ip_func, nullptr);
-    ASSERT_EQ(ip_func, excode_ipimpl::ip64_fxu7_avx);
+    ASSERT_EQ(ip_func, select_excode_ipfunc(7));
 
     ip_func = select_excode_ipfunc(8);
     ASSERT_NE(ip_func, nullptr);

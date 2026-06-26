@@ -11,7 +11,6 @@
 
 namespace rabitqlib::quant::rabitq_impl::ex_bits {
 inline void packing_1bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
-#if defined(__AVX512F__) || defined(__AVX2__)
     // ! require dim % 16 == 0
     for (size_t j = 0; j < dim; j += 16) {
         uint16_t code = 0;
@@ -23,14 +22,9 @@ inline void packing_1bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t
         o_raw += 16;
         o_compact += 2;
     }
-#else
-    std::cerr << "Current only support AVX512F and AVX2 for packing excode\n" << std::flush;
-    exit(1);
-#endif
 }
 
 inline void packing_2bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
-#if defined(__AVX512F__) || defined(__AVX2__)
     // ! require dim % 16 == 0
     for (size_t j = 0; j < dim; j += 64) {
         // pack 64 2-bit codes into 128 bits (16 bytes)
@@ -51,14 +45,9 @@ inline void packing_2bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t
         o_raw += 64;
         o_compact += 16;
     }
-#else
-    std::cerr << "Current only support AVX512F and AVX2 for packing excode\n" << std::flush;
-    exit(1);
-#endif
 }
 
 inline void packing_3bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
-#if defined(__AVX512F__) || defined(__AVX2__)
     // ! require dim % 64 == 0
     const __m128i mask = _mm_set1_epi8(0b11);
     for (size_t d = 0; d < dim; d += 64) {
@@ -99,16 +88,11 @@ inline void packing_3bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t
         o_raw += 64;
         o_compact += 8;
     }
-#else
-    std::cerr << "Current only support AVX512F and AVX2 for packing excode\n" << std::flush;
-    exit(1);
-#endif
 }
 
 inline void packing_4bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
 // although this part only requries SSE, computing inner product for this orgnization
 // requires AVX512F, similar for remaining functions
-#if defined(__AVX512F__) || defined(__AVX2__)
     // ! require dim % 16 == 0
     for (size_t j = 0; j < dim; j += 16) {
         // pack 16 4-bit codes into uint64
@@ -124,14 +108,9 @@ inline void packing_4bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t
         o_raw += 16;
         o_compact += 8;
     }
-#else
-    std::cerr << "Current only support AVX512F and AVX2 for packing excode\n" << std::flush;
-    exit(1);
-#endif
 }
 
 inline void packing_5bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
-#if defined(__AVX512F__) || defined(__AVX2__)
     // ! require dim % 64 == 0
     const __m128i mask = _mm_set1_epi8(0b1111);
     for (size_t j = 0; j < dim; j += 64) {
@@ -169,14 +148,9 @@ inline void packing_5bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t
         o_raw += 64;
         o_compact += 8;
     }
-#else
-    std::cerr << "Current only support AVX512F and AVX2 for packing excode\n" << std::flush;
-    exit(1);
-#endif
 }
 
 inline void packing_6bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
-#if defined(__AVX512F__) || defined(__AVX2__)
     // for vec00 to vec47, split code into 6
     // for vec48 to vec63, split code into 2 + 2 + 2
     const __m128i mask2 = _mm_set1_epi8(static_cast<char>(0b11000000));
@@ -207,14 +181,9 @@ inline void packing_6bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t
         o_compact += 48;
         o_raw += 64;
     }
-#else
-    std::cerr << "Current only support AVX512F and AVX2 for packing excode\n" << std::flush;
-    exit(1);
-#endif
 }
 
 inline void packing_7bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
-#if defined(__AVX512F__) || defined(__AVX2__)
     // for vec00 to vec47, split code into 6 + 1
     // for vec48 to vec63, split code into 2 + 2 + 2 + 1
     const __m128i mask2 = _mm_set1_epi8(static_cast<char>(0b11000000));
@@ -258,10 +227,6 @@ inline void packing_7bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t
         o_compact += 8;
         o_raw += 64;
     }
-#else
-    std::cerr << "Current only support AVX512F and AVX2 for packing excode\n" << std::flush;
-    exit(1);
-#endif
 }
 
 inline void packing_8bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
