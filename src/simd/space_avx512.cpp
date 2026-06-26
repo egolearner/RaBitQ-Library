@@ -1,10 +1,49 @@
 #include <immintrin.h>
 
+#include <cmath>
 #include <cstdint>
 
 #include "rabitqlib/utils/space.hpp"
 
 namespace rabitqlib::simd {
+
+void scalar_quantize_uint8_avx512(
+    uint8_t* result, const float* vec0, size_t dim, float lo, float delta
+) {
+    size_t mul16 = dim - (dim & 0b1111);
+    size_t i = 0;
+    float one_over_delta = 1.0F / delta;
+    __m512 lo512 = _mm512_set1_ps(lo);
+    __m512 od512 = _mm512_set1_ps(one_over_delta);
+    for (; i < mul16; i += 16) {
+        __m512 cur = _mm512_loadu_ps(&vec0[i]);
+        cur = _mm512_mul_ps(_mm512_sub_ps(cur, lo512), od512);
+        __m128i i8 = _mm512_cvtusepi32_epi8(_mm512_cvtps_epi32(cur));
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(&result[i]), i8);
+    }
+    for (; i < dim; ++i) {
+        result[i] = static_cast<uint8_t>(std::round((vec0[i] - lo) * one_over_delta));
+    }
+}
+
+void scalar_quantize_uint16_avx512(
+    uint16_t* result, const float* vec0, size_t dim, float lo, float delta
+) {
+    size_t mul16 = dim - (dim & 0b1111);
+    size_t i = 0;
+    float one_over_delta = 1.0F / delta;
+    __m512 lo512 = _mm512_set1_ps(lo);
+    __m512 ow512 = _mm512_set1_ps(one_over_delta);
+    for (; i < mul16; i += 16) {
+        __m512 cur = _mm512_loadu_ps(&vec0[i]);
+        cur = _mm512_mul_ps(_mm512_sub_ps(cur, lo512), ow512);
+        __m256i i16 = _mm512_cvtusepi32_epi16(_mm512_cvtps_epi32(cur));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(&result[i]), i16);
+    }
+    for (; i < dim; ++i) {
+        result[i] = static_cast<uint16_t>(std::round((vec0[i] - lo) * one_over_delta));
+    }
+}
 
 void new_transpose_bin_avx512(
     const uint16_t* q, uint64_t* tq, size_t padded_dim, size_t b_query

@@ -1,6 +1,7 @@
 #include "rabitqlib/simd/dispatch.hpp"
 
 #include <array>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 
@@ -18,6 +19,16 @@ namespace {
 
 [[noreturn]] void missing_feature(const char* feature_name) {
     throw std::runtime_error(std::string(feature_name) + " requires AVX2/FMA or AVX512 support");
+}
+
+template <typename T>
+void scalar_quantize_fallback(
+    T* result, const float* vec0, size_t dim, float lo, float delta
+) {
+    float one_over_delta = 1.0F / delta;
+    for (size_t i = 0; i < dim; ++i) {
+        result[i] = static_cast<T>(std::round((vec0[i] - lo) * one_over_delta));
+    }
 }
 
 }  // namespace
@@ -84,6 +95,38 @@ void kacs_walk(float* data, size_t len) {
         return kacs_walk_avx2;
     }();
     fn(data, len);
+}
+
+void scalar_quantize_uint8(
+    uint8_t* result, const float* vec0, size_t dim, float lo, float delta
+) {
+    using Fn = void (*)(uint8_t*, const float*, size_t, float, float);
+    static const Fn fn = [] {
+        if (cpu::has_avx512_core()) {
+            return scalar_quantize_uint8_avx512;
+        }
+        if (cpu::has_avx2()) {
+            return scalar_quantize_uint8_avx2;
+        }
+        return scalar_quantize_fallback<uint8_t>;
+    }();
+    fn(result, vec0, dim, lo, delta);
+}
+
+void scalar_quantize_uint16(
+    uint16_t* result, const float* vec0, size_t dim, float lo, float delta
+) {
+    using Fn = void (*)(uint16_t*, const float*, size_t, float, float);
+    static const Fn fn = [] {
+        if (cpu::has_avx512_core()) {
+            return scalar_quantize_uint16_avx512;
+        }
+        if (cpu::has_avx2()) {
+            return scalar_quantize_uint16_avx2;
+        }
+        return scalar_quantize_fallback<uint16_t>;
+    }();
+    fn(result, vec0, dim, lo, delta);
 }
 
 }  // namespace rabitqlib::simd

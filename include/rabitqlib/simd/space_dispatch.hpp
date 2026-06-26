@@ -3,8 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "rabitqlib/utils/space.hpp"
-
 namespace rabitqlib::simd {
 namespace excode_ipimpl {
 
@@ -29,9 +27,16 @@ float ip64_fxu7_avx512(const float* __restrict__ query, const uint8_t* __restric
 void new_transpose_bin_avx2(const uint16_t* q, uint64_t* tq, size_t padded_dim, size_t b_query);
 void new_transpose_bin_512_avx2(const uint8_t* q, uint64_t* tq, size_t padded_dim, size_t b_query);
 float mask_ip_x0_q_avx2(const float* query, const uint64_t* data, size_t padded_dim);
+void scalar_quantize_uint8_avx2(uint8_t* result, const float* vec0, size_t dim, float lo, float delta);
+void scalar_quantize_uint16_avx2(uint16_t* result, const float* vec0, size_t dim, float lo, float delta);
 
 void new_transpose_bin_avx512(const uint16_t* q, uint64_t* tq, size_t padded_dim, size_t b_query);
 void new_transpose_bin_512_avx512(const uint8_t* q, uint64_t* tq, size_t padded_dim, size_t b_query);
 float mask_ip_x0_q_avx512(const float* query, const uint64_t* data, size_t padded_dim);
+void scalar_quantize_uint8_avx512(uint8_t* result, const float* vec0, size_t dim, float lo, float delta);
+void scalar_quantize_uint16_avx512(uint16_t* result, const float* vec0, size_t dim, float lo, float delta);
+
+void scalar_quantize_uint8(uint8_t* result, const float* vec0, size_t dim, float lo, float delta);
+void scalar_quantize_uint16(uint16_t* result, const float* vec0, size_t dim, float lo, float delta);
 
 }  // namespace rabitqlib::simd

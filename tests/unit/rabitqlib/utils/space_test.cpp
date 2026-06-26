@@ -47,6 +47,44 @@ TEST(Select_IP_Func, returns_stable_function_pointer) {
     ASSERT_EQ(ip_func, (excode_ipimpl::ip_fxi<float, uint8_t>));
 }
 
+TEST(ScalarQuantize, Uint8MatchesRoundedScalar) {
+    constexpr size_t dim = 37;
+    constexpr float lo = -3.0F;
+    constexpr float delta = 0.25F;
+    std::vector<float> input(dim);
+    std::vector<uint8_t> result(dim);
+    std::vector<uint8_t> expected(dim);
+
+    for (size_t i = 0; i < dim; ++i) {
+        float quantized = static_cast<float>((i * 7) % 251) + (static_cast<int>(i % 3) - 1) * 0.2F;
+        input[i] = lo + delta * quantized;
+        expected[i] = static_cast<uint8_t>(std::round((input[i] - lo) / delta));
+    }
+
+    scalar_quantize<uint8_t>(result.data(), input.data(), dim, lo, delta);
+
+    ASSERT_EQ(result, expected);
+}
+
+TEST(ScalarQuantize, Uint16MatchesRoundedScalar) {
+    constexpr size_t dim = 41;
+    constexpr float lo = 2.0F;
+    constexpr float delta = 0.125F;
+    std::vector<float> input(dim);
+    std::vector<uint16_t> result(dim);
+    std::vector<uint16_t> expected(dim);
+
+    for (size_t i = 0; i < dim; ++i) {
+        float quantized = static_cast<float>(1000 + i * 317) + (static_cast<int>(i % 5) - 2) * 0.1F;
+        input[i] = lo + delta * quantized;
+        expected[i] = static_cast<uint16_t>(std::round((input[i] - lo) / delta));
+    }
+
+    scalar_quantize<uint16_t>(result.data(), input.data(), dim, lo, delta);
+
+    ASSERT_EQ(result, expected);
+}
+
 TEST(ip16_fxu1_avx, ip_works) {
     srand(42);
     size_t dim = 64;

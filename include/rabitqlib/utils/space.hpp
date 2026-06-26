@@ -1,9 +1,5 @@
 #pragma once
 
-#if defined(__x86_64__) || defined(__i386__)
-#include <emmintrin.h>
-#include <immintrin.h>
-#endif
 #include <omp.h>
 
 #include <array>
@@ -15,6 +11,7 @@
 #include <type_traits>
 
 #include "rabitqlib/defines.hpp"
+#include "rabitqlib/simd/space_dispatch.hpp"
 #include "rabitqlib/utils/tools.hpp"
 
 namespace rabitqlib {
@@ -55,24 +52,7 @@ inline void scalar_quantize_optimized<uint8_t>(
     float lo,
     float delta
 ) {
-#if defined(__AVX512F__)
-    size_t mul16 = dim - (dim & 0b1111);
-    size_t i = 0;
-    float one_over_delta = 1 / delta;
-    auto lo512 = _mm512_set1_ps(lo);
-    auto od512 = _mm512_set1_ps(one_over_delta);
-    for (; i < mul16; i += 16) {
-        auto cur = _mm512_loadu_ps(&vec0[i]);
-        cur = _mm512_mul_ps(_mm512_sub_ps(cur, lo512), od512);
-        auto i8 = _mm512_cvtepi32_epi8(_mm512_cvtps_epi32(cur));
-        _mm_storeu_si128(reinterpret_cast<__m128i*>(&result[i]), i8);
-    }
-    for (; i < dim; ++i) {
-        result[i] = static_cast<uint8_t>(std::round((vec0[i] - lo) * one_over_delta));
-    }
-#else
-    scalar_quantize_normal(result, vec0, dim, lo, delta);
-#endif
+    simd::scalar_quantize_uint8(result, vec0, dim, lo, delta);
 }
 
 template <>
@@ -83,42 +63,7 @@ inline void scalar_quantize_optimized<uint16_t>(
     float lo,
     float delta
 ) {
-#if defined(__AVX512F__)
-    size_t mul16 = dim - (dim & 0b1111);
-    size_t i = 0;
-    float one_over_delta = 1 / delta;
-    auto lo512 = _mm512_set1_ps(lo);
-    auto ow512 = _mm512_set1_ps(one_over_delta);
-    for (; i < mul16; i += 16) {
-        auto cur = _mm512_loadu_ps(&vec0[i]);
-        cur = _mm512_mul_ps(_mm512_sub_ps(cur, lo512), ow512);
-        auto i16 = _mm512_cvtepi32_epi16(_mm512_cvtps_epi32(cur));
-        _mm256_storeu_si256(reinterpret_cast<__m256i*>(&result[i]), i16);
-    }
-    for (; i < dim; ++i) {
-        result[i] = static_cast<uint16_t>(std::round((vec0[i] - lo) * one_over_delta));
-    }
-#elif defined(__AVX2__)
-    size_t mul8 = dim - (dim & 0b111);
-    size_t i = 0;
-    float one_over_delta = 1 / delta;
-    auto lo256 = _mm256_set1_ps(lo);
-    auto ow256 = _mm256_set1_ps(one_over_delta);
-    for (; i < mul8; i += 8) {
-        auto cur = _mm256_loadu_ps(&vec0[i]);
-        cur = _mm256_mul_ps(_mm256_sub_ps(cur, lo256), ow256);
-        auto i32 = _mm256_cvtps_epi32(cur);
-        __m128i lo32 = _mm256_castsi256_si128(i32);
-        __m128i hi32 = _mm256_extracti128_si256(i32, 1);
-        __m128i i16 = _mm_packus_epi32(lo32, hi32);
-        _mm_storeu_si128(reinterpret_cast<__m128i*>(result + i), i16);
-    }
-    for (; i < dim; ++i) {
-        result[i] = static_cast<uint16_t>(std::round((vec0[i] - lo) * one_over_delta));
-    }
-#else
-    scalar_quantize_normal(result, vec0, dim, lo, delta);
-#endif
+    simd::scalar_quantize_uint16(result, vec0, dim, lo, delta);
 }
 }  // namespace scalar_impl
 
