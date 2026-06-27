@@ -18,4 +18,5 @@ foreach(RABITQ_SAMPLE_TARGET
     hnsw_rabitq_querying
 )
     target_link_libraries(${RABITQ_SAMPLE_TARGET} PRIVATE rabitq_headers)
+    target_compile_options(${RABITQ_SAMPLE_TARGET} PRIVATE -march=native)
 endforeach()

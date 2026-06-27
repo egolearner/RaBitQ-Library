@@ -1,5 +1,6 @@
 #include <iostream>
 #include <vector>
+#include <unordered_set>
 
 #include "rabitqlib/defines.hpp"
 #include "rabitqlib/index/ivf/ivf.hpp"
@@ -12,15 +13,8 @@ using index_type = rabitqlib::ivf::IVF;
 using data_type = rabitqlib::RowMajorArray<float>;
 using gt_type = rabitqlib::RowMajorArray<uint32_t>;
 
-static std::vector<size_t> get_nprobes(
-    const index_type& ivf,
-    const std::vector<size_t>& all_nprobes,
-    data_type& query,
-    gt_type& gt
-);
-
 static size_t topk = 100;
-static size_t test_round = 5;
+static size_t test_round = 1;
 
 int main(int argc, char** argv) {
     if (argc < 4) {
@@ -56,32 +50,20 @@ int main(int argc, char** argv) {
     index_type ivf;
     ivf.load(index_file);
 
-    std::vector<size_t> all_nprobes;
-    all_nprobes.push_back(5);
-    for (size_t i = 10; i < 200; i += 10) {
-        all_nprobes.push_back(i);
-    }
-    for (size_t i = 200; i < 400; i += 40) {
-        all_nprobes.push_back(i);
-    }
-    for (size_t i = 400; i <= 1500; i += 100) {
-        all_nprobes.push_back(i);
-    }
-    for (size_t i = 2000; i <= 4000; i += 500) {
-        all_nprobes.push_back(i);
+    std::vector<std::unordered_set<PID>> gt_sets(nq);
+    for (size_t i = 0; i < nq; i++) {
+        for (size_t k = 0; k < topk; k++) {
+            gt_sets[i].insert(gt(i, k));
+        }
     }
 
-    all_nprobes.push_back(6000);
-    all_nprobes.push_back(10000);
-    all_nprobes.push_back(15000);
-
-    rabitqlib::StopW stopw;
-
-    auto nprobes = get_nprobes(ivf, all_nprobes, query, gt);
+    std::vector<size_t> nprobes = {5, 10, 20, 40, 80, 120, 200, 300, 400, 600, 800, 1000};
     size_t length = nprobes.size();
 
     std::vector<std::vector<float>> all_qps(test_round, std::vector<float>(length));
     std::vector<std::vector<float>> all_recall(test_round, std::vector<float>(length));
+
+    rabitqlib::StopW stopw;
 
     for (size_t r = 0; r < test_round; r++) {
         for (size_t l = 0; l < length; ++l) {
@@ -97,12 +79,10 @@ int main(int argc, char** argv) {
                 stopw.reset();
                 ivf.search(&query(i, 0), topk, nprobe, results.data(), use_hacc);
                 total_time += stopw.get_elapsed_micro();
+                const auto& gt_set = gt_sets[i];
                 for (size_t j = 0; j < topk; j++) {
-                    for (size_t k = 0; k < topk; k++) {
-                        if (gt(i, k) == results[j]) {
-                            total_correct++;
-                            break;
-                        }
+                    if (gt_set.count(results[j])) {
+                        total_correct++;
                     }
                 }
             }
@@ -129,42 +109,4 @@ int main(int argc, char** argv) {
     }
 
     return 0;
-}
-
-static std::vector<size_t> get_nprobes(
-    const index_type& ivf,
-    const std::vector<size_t>& all_nprobes,
-    data_type& query,
-    gt_type& gt
-) {
-    size_t nq = query.rows();
-    size_t total_count = topk * nq;
-    float old_recall = 0;
-    std::vector<size_t> nprobes;
-
-    for (auto nprobe : all_nprobes) {
-        nprobes.push_back(nprobe);
-
-        size_t total_correct = 0;
-        std::vector<PID> results(topk);
-        for (size_t i = 0; i < nq; i++) {
-            ivf.search(&query(i, 0), topk, nprobe, results.data());
-            for (size_t j = 0; j < topk; j++) {
-                for (size_t k = 0; k < topk; k++) {
-                    if (gt(i, k) == results[j]) {
-                        total_correct++;
-                        break;
-                    }
-                }
-            }
-        }
-        float recall = static_cast<float>(total_correct) / static_cast<float>(total_count);
-        if (recall > 0.997 || recall - old_recall < 1e-5) {
-            break;
-        }
-        std::cout << recall << '\t' << nprobe << std::endl << std::flush;
-        old_recall = recall;
-    }
-
-    return nprobes;
 }

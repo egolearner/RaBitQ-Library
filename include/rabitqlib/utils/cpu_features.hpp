@@ -12,7 +12,6 @@ struct Features {
 };
 
 const Features& features();
-bool env_flag_enabled(const char* name);
 bool has_avx2();
 bool has_avx512_core();
 bool has_avx512_popcnt();
