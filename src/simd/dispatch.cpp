@@ -9,34 +9,12 @@
 #include "rabitqlib/simd/fastscan_dispatch.hpp"
 #include "rabitqlib/simd/rotator_dispatch.hpp"
 #include "rabitqlib/simd/warmup_dispatch.hpp"
-#include "rabitqlib/utils/warmup_space.hpp"
-#include "rabitqlib/fastscan/fastscan.hpp"
-#include "rabitqlib/fastscan/highacc_fastscan.hpp"
 #include "rabitqlib/utils/cpu_features.hpp"
 
 namespace rabitqlib::simd {
-namespace {
 
-[[noreturn]] void missing_feature(const char* feature_name) {
+[[noreturn]] static void missing_feature(const char* feature_name) {
     throw std::runtime_error(std::string(feature_name) + " requires AVX2/FMA or AVX512 support");
-}
-
-template <typename T>
-void scalar_quantize_fallback(
-    T* result, const float* vec0, size_t dim, float lo, float delta
-) {
-    float one_over_delta = 1.0F / delta;
-    for (size_t i = 0; i < dim; ++i) {
-        result[i] = static_cast<T>(std::round((vec0[i] - lo) * one_over_delta));
-    }
-}
-
-}  // namespace
-
-void require_avx2(const char* feature_name) {
-    if (!cpu::has_avx2()) {
-        missing_feature(feature_name);
-    }
 }
 
 ExcodeIpTable resolve_excode_ip_table() {
@@ -50,12 +28,9 @@ ExcodeIpTable resolve_excode_ip_table() {
             excode_ipimpl::ip64_fxu5_avx512,
             excode_ipimpl::ip64_fxu6_avx512,
             excode_ipimpl::ip64_fxu7_avx512,
-            // 8-bit codes are already byte-aligned, so the generic float/int IP path is used.
             rabitqlib::excode_ipimpl::ip_fxi<float, uint8_t>,
         };
-    }
-
-    if (cpu::has_avx2()) {
+    } else if (cpu::has_avx2()) {
         return {
             excode_ipimpl::ip16_fxu1_avx2,
             excode_ipimpl::ip16_fxu1_avx2,
@@ -65,12 +40,11 @@ ExcodeIpTable resolve_excode_ip_table() {
             excode_ipimpl::ip64_fxu5_avx2,
             excode_ipimpl::ip64_fxu6_avx2,
             excode_ipimpl::ip64_fxu7_avx2,
-            // 8-bit codes are already byte-aligned, so the generic float/int IP path is used.
             rabitqlib::excode_ipimpl::ip_fxi<float, uint8_t>,
         };
+    } else {
+        missing_feature("excode ip functions");
     }
-
-    missing_feature("excode ip functions");
 }
 
 void flip_sign(const uint8_t* flip, float* data, size_t dim) {
@@ -78,9 +52,11 @@ void flip_sign(const uint8_t* flip, float* data, size_t dim) {
     static const Fn fn = [] {
         if (cpu::has_avx512_core()) {
             return flip_sign_avx512;
+        } else if (cpu::has_avx2()) {
+            return flip_sign_avx2;
+        } else {
+            missing_feature("sign flip");
         }
-        require_avx2("sign flip");
-        return flip_sign_avx2;
     }();
     fn(flip, data, dim);
 }
@@ -90,9 +66,11 @@ void kacs_walk(float* data, size_t len) {
     static const Fn fn = [] {
         if (cpu::has_avx512_core()) {
             return kacs_walk_avx512;
+        } else if (cpu::has_avx2()) {
+            return kacs_walk_avx2;
+        } else {
+            missing_feature("FhtKacRotator");
         }
-        require_avx2("FhtKacRotator");
-        return kacs_walk_avx2;
     }();
     fn(data, len);
 }
@@ -104,11 +82,11 @@ void scalar_quantize_uint8(
     static const Fn fn = [] {
         if (cpu::has_avx512_core()) {
             return scalar_quantize_uint8_avx512;
-        }
-        if (cpu::has_avx2()) {
+        } else if (cpu::has_avx2()) {
             return scalar_quantize_uint8_avx2;
+        } else {
+            missing_feature("uint8 quantize");
         }
-        return scalar_quantize_fallback<uint8_t>;
     }();
     fn(result, vec0, dim, lo, delta);
 }
@@ -120,11 +98,11 @@ void scalar_quantize_uint16(
     static const Fn fn = [] {
         if (cpu::has_avx512_core()) {
             return scalar_quantize_uint16_avx512;
-        }
-        if (cpu::has_avx2()) {
+        } else if (cpu::has_avx2()) {
             return scalar_quantize_uint16_avx2;
+        } else {
+            missing_feature("uint16 quantize");
         }
-        return scalar_quantize_fallback<uint16_t>;
     }();
     fn(result, vec0, dim, lo, delta);
 }
@@ -198,9 +176,11 @@ void new_transpose_bin(
     static const Fn fn = [] {
         if (cpu::has_avx512_core()) {
             return simd::new_transpose_bin_avx512;
+        } else if (cpu::has_avx2()) {
+            return simd::new_transpose_bin_avx2;
+        } else {
+            simd::missing_feature("new transpose bin");
         }
-        simd::require_avx2("new transpose bin");
-        return simd::new_transpose_bin_avx2;
     }();
     fn(q, tq, padded_dim, b_query);
 }
@@ -212,9 +192,11 @@ void new_transpose_bin_512(
     static const Fn fn = [] {
         if (cpu::has_avx512_core()) {
             return simd::new_transpose_bin_512_avx512;
+        } else if (cpu::has_avx2()) {
+            return simd::new_transpose_bin_512_avx2;
+        } else {
+            simd::missing_feature("new_transpose_bin_512");
         }
-        simd::require_avx2("new_transpose_bin_512");
-        return simd::new_transpose_bin_512_avx2;
     }();
     fn(q, tq, padded_dim, b_query);
 }
@@ -224,9 +206,11 @@ float mask_ip_x0_q(const float* query, const uint64_t* data, size_t padded_dim) 
     static const Fn fn = [] {
         if (cpu::has_avx512_core()) {
             return simd::mask_ip_x0_q_avx512;
+        } else if (cpu::has_avx2()) {
+            return simd::mask_ip_x0_q_avx2;
+        } else {
+            simd::missing_feature("mask ip x0 q");
         }
-        simd::require_avx2("mask ip x0 q");
-        return simd::mask_ip_x0_q_avx2;
     }();
     return fn(query, data, padded_dim);
 }
@@ -245,9 +229,11 @@ void accumulate(
     static const Fn fn = [] {
         if (cpu::has_avx512_core()) {
             return simd::accumulate_avx512;
+        } else if (cpu::has_avx2()) {
+            return simd::accumulate_avx2;
+        } else {
+            rabitqlib::simd::missing_feature("fastscan accumulate");
         }
-        rabitqlib::simd::require_avx2("fastscan accumulate");
-        return simd::accumulate_avx2;
     }();
     fn(codes, lp_table, result, dim);
 }
@@ -257,9 +243,11 @@ void transfer_lut_hacc(const uint16_t* lut, size_t dim, uint8_t* hc_lut) {
     static const Fn fn = [] {
         if (cpu::has_avx512_core()) {
             return simd::transfer_lut_hacc_avx512;
+        } else if (cpu::has_avx2()) {
+            return simd::transfer_lut_hacc_avx2;
+        } else {
+            rabitqlib::simd::missing_feature("fastscan high-accuracy LUT transfer");
         }
-        rabitqlib::simd::require_avx2("fastscan high-accuracy LUT transfer");
-        return simd::transfer_lut_hacc_avx2;
     }();
     fn(lut, dim, hc_lut);
 }
@@ -274,9 +262,11 @@ void accumulate_hacc(
     static const Fn fn = [] {
         if (cpu::has_avx512_core()) {
             return simd::accumulate_hacc_avx512;
+        } else if (cpu::has_avx2()) {
+            return simd::accumulate_hacc_avx2;
+        } else {
+            rabitqlib::simd::missing_feature("fastscan high-accuracy accumulate");
         }
-        rabitqlib::simd::require_avx2("fastscan high-accuracy accumulate");
-        return simd::accumulate_hacc_avx2;
     }();
     fn(codes, hc_lut, accu_res, dim);
 }
@@ -297,9 +287,11 @@ float warmup_ip_x0_q_512(
     static const Fn fn = [] {
         if (rabitqlib::cpu::has_avx512_popcnt()) {
             return rabitqlib::simd::warmup_ip_x0_q_512_avx512;
+        } else if (rabitqlib::cpu::has_avx2()) {
+            return rabitqlib::simd::warmup_ip_x0_q_512_avx2;
+        } else {
+            rabitqlib::simd::missing_feature("warmup_ip_x0_q_512");
         }
-        rabitqlib::simd::require_avx2("warmup_ip_x0_q_512");
-        return rabitqlib::simd::warmup_ip_x0_q_512_avx2;
     }();
     return fn(data, query, delta, vl, padded_dim, b_query);
 }
