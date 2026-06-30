@@ -33,18 +33,35 @@ set(RABITQ_AVX512_SOURCES
     src/simd/rotator_avx512.cpp
 )
 
+set(RABITQ_HNSW_AVX2_SOURCES
+    src/index/hnsw_search_avx2.cpp
+)
+
+set(RABITQ_HNSW_AVX512_CORE_SOURCES
+    src/index/hnsw_search_avx512_core.cpp
+)
+
+set(RABITQ_HNSW_AVX512_POPCNT_SOURCES
+    src/index/hnsw_search_avx512_popcnt.cpp
+)
+
 add_library(rabitq_core STATIC
     ${RABITQ_COMMON_SOURCES}
     ${RABITQ_AVX2_SOURCES}
     ${RABITQ_AVX512_SOURCES}
+    ${RABITQ_HNSW_AVX2_SOURCES}
+    ${RABITQ_HNSW_AVX512_CORE_SOURCES}
+    ${RABITQ_HNSW_AVX512_POPCNT_SOURCES}
 )
 
 target_include_directories(rabitq_core PUBLIC ${PROJECT_SOURCE_DIR}/include)
 set_target_properties(rabitq_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_options(rabitq_core PRIVATE -fopenmp)
-set_source_files_properties(${RABITQ_COMMON_SOURCES} PROPERTIES COMPILE_OPTIONS "-march=native")
 set_source_files_properties(${RABITQ_AVX2_SOURCES} PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma")
 set_source_files_properties(${RABITQ_AVX512_SOURCES} PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512bw;-mavx512dq;-mavx512vpopcntdq;-mfma")
+set_source_files_properties(${RABITQ_HNSW_AVX2_SOURCES} PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma")
+set_source_files_properties(${RABITQ_HNSW_AVX512_CORE_SOURCES} PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512bw;-mavx512dq;-mavx2;-mfma")
+set_source_files_properties(${RABITQ_HNSW_AVX512_POPCNT_SOURCES} PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512bw;-mavx512dq;-mavx512vpopcntdq;-mfma")
 
 add_library(rabitq_headers INTERFACE)
 target_include_directories(rabitq_headers INTERFACE ${PROJECT_SOURCE_DIR}/include)
