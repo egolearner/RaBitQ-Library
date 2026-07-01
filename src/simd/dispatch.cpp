@@ -7,6 +7,7 @@
 
 #include "rabitqlib/simd/space_dispatch.hpp"
 #include "rabitqlib/simd/fastscan_dispatch.hpp"
+#include "rabitqlib/simd/pack_excode_dispatch.hpp"
 #include "rabitqlib/simd/rotator_dispatch.hpp"
 #include "rabitqlib/simd/warmup_dispatch.hpp"
 #include "rabitqlib/utils/cpu_features.hpp"
@@ -91,6 +92,31 @@ const ScalarQuantizeUint16Fn kScalarQuantizeUint16Fn = [] {
     }
 }();
 
+using PackExcodeFn = void (*)(const uint8_t*, uint8_t*, size_t);
+
+static PackExcodeFn resolve_pack_excode_fn(PackExcodeFn avx512_fn, PackExcodeFn avx2_fn) {
+    if (cpu::has_avx512_core()) {
+        return avx512_fn;
+    } else if (cpu::has_avx2()) {
+        return avx2_fn;
+    } else {
+        missing_feature("excode packing");
+    }
+}
+
+const PackExcodeFn kPacking2BitExcodeFn =
+    resolve_pack_excode_fn(packing_2bit_excode_avx512, packing_2bit_excode_avx2);
+const PackExcodeFn kPacking3BitExcodeFn =
+    resolve_pack_excode_fn(packing_3bit_excode_avx512, packing_3bit_excode_avx2);
+const PackExcodeFn kPacking4BitExcodeFn =
+    resolve_pack_excode_fn(packing_4bit_excode_avx512, packing_4bit_excode_avx2);
+const PackExcodeFn kPacking5BitExcodeFn =
+    resolve_pack_excode_fn(packing_5bit_excode_avx512, packing_5bit_excode_avx2);
+const PackExcodeFn kPacking6BitExcodeFn =
+    resolve_pack_excode_fn(packing_6bit_excode_avx512, packing_6bit_excode_avx2);
+const PackExcodeFn kPacking7BitExcodeFn =
+    resolve_pack_excode_fn(packing_7bit_excode_avx512, packing_7bit_excode_avx2);
+
 void flip_sign(const uint8_t* flip, float* data, size_t dim) {
     kFlipSignFn(flip, data, dim);
 }
@@ -109,6 +135,30 @@ void scalar_quantize_uint16(
     uint16_t* result, const float* vec0, size_t dim, float lo, float delta
 ) {
     kScalarQuantizeUint16Fn(result, vec0, dim, lo, delta);
+}
+
+void packing_2bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
+    kPacking2BitExcodeFn(o_raw, o_compact, dim);
+}
+
+void packing_3bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
+    kPacking3BitExcodeFn(o_raw, o_compact, dim);
+}
+
+void packing_4bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
+    kPacking4BitExcodeFn(o_raw, o_compact, dim);
+}
+
+void packing_5bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
+    kPacking5BitExcodeFn(o_raw, o_compact, dim);
+}
+
+void packing_6bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
+    kPacking6BitExcodeFn(o_raw, o_compact, dim);
+}
+
+void packing_7bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
+    kPacking7BitExcodeFn(o_raw, o_compact, dim);
 }
 
 }  // namespace rabitqlib::simd

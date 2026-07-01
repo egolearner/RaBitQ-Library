@@ -6,6 +6,8 @@
 #include <cstring>
 #include <iostream>
 
+#include "rabitqlib/simd/pack_excode_dispatch.hpp"
+
 namespace rabitqlib::quant::rabitq_impl::ex_bits {
 inline void packing_1bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
     // ! require dim % 16 == 0
@@ -22,132 +24,27 @@ inline void packing_1bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t
 }
 
 inline void packing_2bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
-    // ! require dim % 64 == 0
-    for (size_t j = 0; j < dim; j += 64) {
-        // Pack 64 2-bit codes into 16 bytes. Byte k stores dimensions
-        // k, k + 16, k + 32, and k + 48 in bits [1:0], [3:2], [5:4], [7:6].
-        for (size_t k = 0; k < 16; ++k) {
-            o_compact[k] = static_cast<uint8_t>(
-                (o_raw[k] & 0x03U) | ((o_raw[k + 16] & 0x03U) << 2) |
-                ((o_raw[k + 32] & 0x03U) << 4) | ((o_raw[k + 48] & 0x03U) << 6)
-            );
-        }
-
-        o_raw += 64;
-        o_compact += 16;
-    }
+    ::rabitqlib::simd::packing_2bit_excode(o_raw, o_compact, dim);
 }
 
 inline void packing_3bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
-    // ! require dim % 64 == 0
-    for (size_t d = 0; d < dim; d += 64) {
-        // split 3-bit codes into 2 bits and 1 bit
-        // for 2-bit part, compact it like 2-bit code
-        // for 1-bit part, compact 64 1-bit code into a int64
-        for (size_t k = 0; k < 16; ++k) {
-            o_compact[k] = static_cast<uint8_t>(
-                (o_raw[k] & 0x03U) | ((o_raw[k + 16] & 0x03U) << 2) |
-                ((o_raw[k + 32] & 0x03U) << 4) | ((o_raw[k + 48] & 0x03U) << 6)
-            );
-        }
-        o_compact += 16;
-
-        uint64_t top_bit = 0;
-        for (size_t lane = 0; lane < 8; ++lane) {
-            uint8_t packed = 0;
-            for (size_t group = 0; group < 8; ++group) {
-                packed |= static_cast<uint8_t>(((o_raw[group * 8 + lane] >> 2) & 0x01U) << group);
-            }
-            top_bit |= static_cast<uint64_t>(packed) << (lane * 8);
-        }
-        std::memcpy(o_compact, &top_bit, sizeof(uint64_t));
-
-        o_raw += 64;
-        o_compact += 8;
-    }
+    ::rabitqlib::simd::packing_3bit_excode(o_raw, o_compact, dim);
 }
 
 inline void packing_4bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
-    // ! require dim % 16 == 0
-    for (size_t j = 0; j < dim; j += 16) {
-        // pack 16 4-bit codes into uint64
-        // the lower 4 bits represent vec00 to vec07
-        // the upper 4 bits represent vec08 to vec15
-        for (size_t k = 0; k < 8; ++k) {
-            o_compact[k] = static_cast<uint8_t>((o_raw[k] & 0x0FU) | ((o_raw[k + 8] & 0x0FU) << 4));
-        }
-
-        o_raw += 16;
-        o_compact += 8;
-    }
+    ::rabitqlib::simd::packing_4bit_excode(o_raw, o_compact, dim);
 }
 
 inline void packing_5bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
-    // ! require dim % 64 == 0
-    for (size_t j = 0; j < dim; j += 64) {
-        for (size_t k = 0; k < 16; ++k) {
-            o_compact[k] = static_cast<uint8_t>((o_raw[k] & 0x0FU) | ((o_raw[k + 16] & 0x0FU) << 4));
-            o_compact[k + 16] = static_cast<uint8_t>((o_raw[k + 32] & 0x0FU) | ((o_raw[k + 48] & 0x0FU) << 4));
-        }
-
-        o_compact += 32;
-
-        uint64_t top_bit = 0;
-        for (size_t lane = 0; lane < 8; ++lane) {
-            uint8_t packed = 0;
-            for (size_t group = 0; group < 8; ++group) {
-                packed |= static_cast<uint8_t>(((o_raw[group * 8 + lane] >> 4) & 0x01U) << group);
-            }
-            top_bit |= static_cast<uint64_t>(packed) << (lane * 8);
-        }
-        std::memcpy(o_compact, &top_bit, sizeof(uint64_t));
-
-        o_raw += 64;
-        o_compact += 8;
-    }
+    ::rabitqlib::simd::packing_5bit_excode(o_raw, o_compact, dim);
 }
 
 inline void packing_6bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
-    // for vec00 to vec47, split code into 6
-    // for vec48 to vec63, split code into 2 + 2 + 2
-    for (size_t d = 0; d < dim; d += 64) {
-        for (size_t k = 0; k < 16; ++k) {
-            const uint8_t tail = o_raw[k + 48];
-            o_compact[k] = static_cast<uint8_t>((o_raw[k] & 0x3FU) | ((tail & 0x03U) << 6));
-            o_compact[k + 16] = static_cast<uint8_t>((o_raw[k + 16] & 0x3FU) | (((tail >> 2) & 0x03U) << 6));
-            o_compact[k + 32] = static_cast<uint8_t>((o_raw[k + 32] & 0x3FU) | (((tail >> 4) & 0x03U) << 6));
-        }
-
-        o_compact += 48;
-        o_raw += 64;
-    }
+    ::rabitqlib::simd::packing_6bit_excode(o_raw, o_compact, dim);
 }
 
 inline void packing_7bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
-    // for vec00 to vec47, split code into 6 + 1
-    // for vec48 to vec63, split code into 2 + 2 + 2 + 1
-    for (size_t d = 0; d < dim; d += 64) {
-        for (size_t k = 0; k < 16; ++k) {
-            const uint8_t tail = o_raw[k + 48];
-            o_compact[k] = static_cast<uint8_t>((o_raw[k] & 0x3FU) | ((tail & 0x03U) << 6));
-            o_compact[k + 16] = static_cast<uint8_t>((o_raw[k + 16] & 0x3FU) | (((tail >> 2) & 0x03U) << 6));
-            o_compact[k + 32] = static_cast<uint8_t>((o_raw[k + 32] & 0x3FU) | (((tail >> 4) & 0x03U) << 6));
-        }
-        o_compact += 48;
-
-        uint64_t top_bit = 0;
-        for (size_t lane = 0; lane < 8; ++lane) {
-            uint8_t packed = 0;
-            for (size_t group = 0; group < 8; ++group) {
-                packed |= static_cast<uint8_t>(((o_raw[group * 8 + lane] >> 6) & 0x01U) << group);
-            }
-            top_bit |= static_cast<uint64_t>(packed) << (lane * 8);
-        }
-        std::memcpy(o_compact, &top_bit, sizeof(uint64_t));
-
-        o_compact += 8;
-        o_raw += 64;
-    }
+    ::rabitqlib::simd::packing_7bit_excode(o_raw, o_compact, dim);
 }
 
 inline void packing_8bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
