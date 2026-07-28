@@ -12,7 +12,13 @@
 
 #include "rabitqlib/defines.hpp"
 #include "rabitqlib/simd/rotator_dispatch.hpp"
+#if defined(RABITQ_TARGET_X86_64)
 #include "rabitqlib/utils/fht_avx.hpp"
+#elif defined(RABITQ_TARGET_AARCH64)
+#include "rabitqlib/utils/fht_neon.hpp"
+#else
+#error "FHT requires an x86_64 or AArch64 target"
+#endif
 #include "rabitqlib/utils/space.hpp"
 #include "rabitqlib/utils/tools.hpp"
 

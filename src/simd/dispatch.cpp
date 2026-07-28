@@ -1,164 +1,441 @@
 #include "rabitqlib/simd/dispatch.hpp"
 
 #include <array>
-#include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <stdexcept>
-#include <string>
 
-#include "rabitqlib/simd/space_dispatch.hpp"
 #include "rabitqlib/simd/fastscan_dispatch.hpp"
 #include "rabitqlib/simd/pack_excode_dispatch.hpp"
 #include "rabitqlib/simd/rotator_dispatch.hpp"
+#include "rabitqlib/simd/space_dispatch.hpp"
 #include "rabitqlib/simd/warmup_dispatch.hpp"
 #include "rabitqlib/utils/cpu_features.hpp"
+#include "simd/backend.hpp"
 
 namespace rabitqlib::simd {
+namespace {
 
-[[noreturn]] static void missing_feature(const char* feature_name) {
-    throw std::runtime_error(std::string(feature_name) + " requires AVX2/FMA or AVX512 support");
+using FlipSignFn = void (*)(const uint8_t*, float*, size_t);
+using KacsWalkFn = void (*)(float*, size_t);
+using ScalarQuantizeUint8Fn = void (*)(uint8_t*, const float*, size_t, float, float);
+using ScalarQuantizeUint16Fn = void (*)(uint16_t*, const float*, size_t, float, float);
+using PackExcodeFn = void (*)(const uint8_t*, uint8_t*, size_t);
+using NewTransposeBinFn = void (*)(const uint16_t*, uint64_t*, size_t, size_t);
+using NewTransposeBin512Fn = void (*)(const uint8_t*, uint64_t*, size_t, size_t);
+using MaskIpX0QFn = float (*)(const float*, const uint64_t*, size_t);
+using AccumulateFn = void (*)(const uint8_t*, const uint8_t*, uint16_t*, size_t);
+using TransferLutHaccFn = void (*)(const uint16_t*, size_t, uint8_t*);
+using AccumulateHaccFn = void (*)(const uint8_t*, const uint8_t*, int32_t*, size_t);
+using WarmupIpX0Q512Fn =
+    float (*)(const uint64_t*, const uint64_t*, float, float, size_t, size_t);
+
+struct DispatchTable {
+    Backend backend;
+    ExcodeIpTable excode_ip;
+    FlipSignFn flip_sign;
+    KacsWalkFn kacs_walk;
+    ScalarQuantizeUint8Fn quantize_uint8;
+    ScalarQuantizeUint16Fn quantize_uint16;
+    std::array<PackExcodeFn, 8> pack_excode;
+    NewTransposeBinFn transpose_bin;
+    NewTransposeBin512Fn transpose_bin_512;
+    MaskIpX0QFn mask_ip;
+    AccumulateFn accumulate;
+    TransferLutHaccFn transfer_lut_hacc;
+    AccumulateHaccFn accumulate_hacc;
+    WarmupIpX0Q512Fn warmup_ip;
+};
+
+[[noreturn]] void missing_void() {
+    throw std::runtime_error("No usable SIMD backend was built for this operation");
+}
+
+float missing_excode(const float*, const uint8_t*, size_t) {
+    missing_void();
+}
+
+void missing_flip(const uint8_t*, float*, size_t) {
+    missing_void();
+}
+
+void missing_kacs(float*, size_t) {
+    missing_void();
+}
+
+void missing_quantize_uint8(uint8_t*, const float*, size_t, float, float) {
+    missing_void();
+}
+
+void missing_quantize_uint16(uint16_t*, const float*, size_t, float, float) {
+    missing_void();
+}
+
+void missing_pack(const uint8_t*, uint8_t*, size_t) {
+    missing_void();
+}
+
+void missing_transpose(const uint16_t*, uint64_t*, size_t, size_t) {
+    missing_void();
+}
+
+void missing_transpose_512(const uint8_t*, uint64_t*, size_t, size_t) {
+    missing_void();
+}
+
+float missing_mask(const float*, const uint64_t*, size_t) {
+    missing_void();
+}
+
+void missing_accumulate(const uint8_t*, const uint8_t*, uint16_t*, size_t) {
+    missing_void();
+}
+
+void missing_transfer(const uint16_t*, size_t, uint8_t*) {
+    missing_void();
+}
+
+void missing_accumulate_hacc(const uint8_t*, const uint8_t*, int32_t*, size_t) {
+    missing_void();
+}
+
+float missing_warmup(const uint64_t*, const uint64_t*, float, float, size_t, size_t) {
+    missing_void();
+}
+
+DispatchTable missing_table() noexcept {
+    return {
+        Backend::Unavailable,
+        {missing_excode,
+         missing_excode,
+         missing_excode,
+         missing_excode,
+         missing_excode,
+         missing_excode,
+         missing_excode,
+         missing_excode,
+         missing_excode},
+        missing_flip,
+        missing_kacs,
+        missing_quantize_uint8,
+        missing_quantize_uint16,
+        {missing_pack,
+         missing_pack,
+         missing_pack,
+         missing_pack,
+         missing_pack,
+         missing_pack,
+         missing_pack,
+         missing_pack},
+        missing_transpose,
+        missing_transpose_512,
+        missing_mask,
+        missing_accumulate,
+        missing_transfer,
+        missing_accumulate_hacc,
+        missing_warmup,
+    };
+}
+
+#if defined(RABITQ_ENABLE_TEST_BACKENDS)
+constexpr bool kScalarCompiled = true;
+#else
+constexpr bool kScalarCompiled = false;
+#endif
+#if defined(RABITQ_TARGET_AARCH64)
+constexpr bool kNeonCompiled = true;
+#else
+constexpr bool kNeonCompiled = false;
+#endif
+#if defined(RABITQ_TARGET_X86_64)
+constexpr bool kX86Compiled = true;
+#else
+constexpr bool kX86Compiled = false;
+#endif
+
+bool unavailable_is_usable() noexcept {
+    return false;
+}
+
+bool scalar_is_usable() noexcept {
+    return kScalarCompiled;
+}
+
+bool neon_is_usable() noexcept {
+    return kNeonCompiled && cpu::has_neon();
+}
+
+bool avx2_is_usable() noexcept {
+    return kX86Compiled && cpu::has_avx2();
+}
+
+bool avx512_core_is_usable() noexcept {
+    return kX86Compiled && cpu::has_avx512_core() && cpu::has_avx2();
+}
+
+bool avx512_popcnt_is_usable() noexcept {
+    return kX86Compiled && cpu::has_avx512_popcnt() && cpu::has_avx2();
+}
+
+using BackendUsableFn = bool (*)() noexcept;
+
+struct BackendDescriptor {
+    Backend backend;
+    const char* name;
+    bool compiled;
+    BackendUsableFn is_usable;
+};
+
+constexpr std::array<BackendDescriptor, 6> kBackendDescriptors = {{
+    {Backend::Unavailable, "unavailable", true, unavailable_is_usable},
+    {Backend::Scalar, "scalar", kScalarCompiled, scalar_is_usable},
+    {Backend::Neon, "neon", kNeonCompiled, neon_is_usable},
+    {Backend::Avx2, "avx2", kX86Compiled, avx2_is_usable},
+    {Backend::Avx512Core, "avx512_core", kX86Compiled, avx512_core_is_usable},
+    {Backend::Avx512Popcnt, "avx512_popcnt", kX86Compiled, avx512_popcnt_is_usable},
+}};
+
+const BackendDescriptor* find_backend_descriptor(Backend backend) noexcept {
+    for (const BackendDescriptor& descriptor : kBackendDescriptors) {
+        if (descriptor.backend == backend) {
+            return &descriptor;
+        }
+    }
+    return nullptr;
+}
+
+bool backend_is_usable(Backend backend) noexcept {
+    const BackendDescriptor* descriptor = find_backend_descriptor(backend);
+    return descriptor != nullptr && descriptor->is_usable();
+}
+
+#if defined(RABITQ_ENABLE_TEST_BACKENDS)
+Backend parse_test_backend(const char* value) noexcept {
+    if (value == nullptr) {
+        return Backend::Unavailable;
+    }
+    if (std::strcmp(value, "avx512") == 0) {
+        return Backend::Avx512Core;
+    }
+    for (const BackendDescriptor& descriptor : kBackendDescriptors) {
+        if (std::strcmp(value, descriptor.name) == 0) {
+            return descriptor.backend;
+        }
+    }
+    return Backend::Unavailable;
+}
+#endif
+
+Backend choose_backend() noexcept {
+#if defined(RABITQ_ENABLE_TEST_BACKENDS)
+    const char* forced = std::getenv("RABITQ_TEST_SIMD_BACKEND");
+    if (forced != nullptr) {
+        const Backend requested = parse_test_backend(forced);
+        return backend_is_usable(requested) ? requested : Backend::Unavailable;
+    }
+#endif
+
+#if defined(RABITQ_TARGET_X86_64)
+    if (backend_is_usable(Backend::Avx512Popcnt)) {
+        return Backend::Avx512Popcnt;
+    }
+    if (backend_is_usable(Backend::Avx512Core)) {
+        return Backend::Avx512Core;
+    }
+    if (backend_is_usable(Backend::Avx2)) {
+        return Backend::Avx2;
+    }
+#elif defined(RABITQ_TARGET_AARCH64)
+    if (backend_is_usable(Backend::Neon)) {
+        return Backend::Neon;
+    }
+#endif
+    return Backend::Unavailable;
+}
+
+template <typename Ip1, typename Ip2, typename Ip3, typename Ip4, typename Ip5, typename Ip6,
+          typename Ip7, typename Ip8>
+void set_excode_table(
+    DispatchTable& table,
+    Ip1 ip1,
+    Ip2 ip2,
+    Ip3 ip3,
+    Ip4 ip4,
+    Ip5 ip5,
+    Ip6 ip6,
+    Ip7 ip7,
+    Ip8 ip8
+) noexcept {
+    table.excode_ip = {ip1, ip1, ip2, ip3, ip4, ip5, ip6, ip7, ip8};
+}
+
+#define RABITQ_SET_COMMON_BACKEND(table, suffix)                                             \
+    do {                                                                                     \
+        (table).flip_sign = flip_sign_##suffix;                                              \
+        (table).kacs_walk = kacs_walk_##suffix;                                              \
+        (table).quantize_uint8 = scalar_quantize_uint8_##suffix;                             \
+        (table).quantize_uint16 = scalar_quantize_uint16_##suffix;                           \
+        (table).pack_excode[2] = packing_2bit_excode_##suffix;                               \
+        (table).pack_excode[3] = packing_3bit_excode_##suffix;                               \
+        (table).pack_excode[4] = packing_4bit_excode_##suffix;                               \
+        (table).pack_excode[5] = packing_5bit_excode_##suffix;                               \
+        (table).pack_excode[6] = packing_6bit_excode_##suffix;                               \
+        (table).pack_excode[7] = packing_7bit_excode_##suffix;                               \
+        (table).transpose_bin = new_transpose_bin_##suffix;                                  \
+        (table).transpose_bin_512 = new_transpose_bin_512_##suffix;                          \
+        (table).mask_ip = mask_ip_x0_q_##suffix;                                             \
+        (table).accumulate = fastscan::simd::accumulate_##suffix;                            \
+        (table).transfer_lut_hacc = fastscan::simd::transfer_lut_hacc_##suffix;               \
+        (table).accumulate_hacc = fastscan::simd::accumulate_hacc_##suffix;                   \
+        (table).warmup_ip = warmup_ip_x0_q_512_##suffix;                                     \
+    } while (false)
+
+DispatchTable make_dispatch_table() noexcept {
+    DispatchTable table = missing_table();
+    table.backend = choose_backend();
+
+    switch (table.backend) {
+#if defined(RABITQ_ENABLE_TEST_BACKENDS)
+        case Backend::Scalar:
+            set_excode_table(
+                table,
+                excode_ipimpl::ip16_fxu1_scalar,
+                excode_ipimpl::ip64_fxu2_scalar,
+                excode_ipimpl::ip64_fxu3_scalar,
+                excode_ipimpl::ip16_fxu4_scalar,
+                excode_ipimpl::ip64_fxu5_scalar,
+                excode_ipimpl::ip64_fxu6_scalar,
+                excode_ipimpl::ip64_fxu7_scalar,
+                excode_ipimpl::ip16_fxu8_scalar
+            );
+            RABITQ_SET_COMMON_BACKEND(table, scalar);
+            break;
+#endif
+#if defined(RABITQ_TARGET_AARCH64)
+        case Backend::Neon:
+            set_excode_table(
+                table,
+                excode_ipimpl::ip16_fxu1_neon,
+                excode_ipimpl::ip64_fxu2_neon,
+                excode_ipimpl::ip64_fxu3_neon,
+                excode_ipimpl::ip16_fxu4_neon,
+                excode_ipimpl::ip64_fxu5_neon,
+                excode_ipimpl::ip64_fxu6_neon,
+                excode_ipimpl::ip64_fxu7_neon,
+                excode_ipimpl::ip16_fxu8_neon
+            );
+            RABITQ_SET_COMMON_BACKEND(table, neon);
+            break;
+#endif
+#if defined(RABITQ_TARGET_X86_64)
+        case Backend::Avx512Popcnt:
+        case Backend::Avx512Core:
+            set_excode_table(
+                table,
+                excode_ipimpl::ip16_fxu1_avx512,
+                excode_ipimpl::ip64_fxu2_avx512,
+                excode_ipimpl::ip64_fxu3_avx512,
+                excode_ipimpl::ip16_fxu4_avx512,
+                excode_ipimpl::ip64_fxu5_avx512,
+                excode_ipimpl::ip64_fxu6_avx512,
+                excode_ipimpl::ip64_fxu7_avx512,
+                excode_ipimpl::ip16_fxu8_avx512
+            );
+            RABITQ_SET_COMMON_BACKEND(table, avx512);
+            if (table.backend == Backend::Avx512Core) {
+                table.warmup_ip = warmup_ip_x0_q_512_avx2;
+            }
+            break;
+        case Backend::Avx2:
+            set_excode_table(
+                table,
+                excode_ipimpl::ip16_fxu1_avx2,
+                excode_ipimpl::ip64_fxu2_avx2,
+                excode_ipimpl::ip64_fxu3_avx2,
+                excode_ipimpl::ip16_fxu4_avx2,
+                excode_ipimpl::ip64_fxu5_avx2,
+                excode_ipimpl::ip64_fxu6_avx2,
+                excode_ipimpl::ip64_fxu7_avx2,
+                excode_ipimpl::ip16_fxu8_avx2
+            );
+            RABITQ_SET_COMMON_BACKEND(table, avx2);
+            break;
+#endif
+        case Backend::Unavailable:
+            break;
+        default:
+            table = missing_table();
+            break;
+    }
+    return table;
+}
+
+#undef RABITQ_SET_COMMON_BACKEND
+
+const DispatchTable kDispatchTable = make_dispatch_table();
+
+}  // namespace
+
+Backend selected_backend() noexcept {
+    return kDispatchTable.backend;
+}
+
+const char* backend_name(Backend backend) noexcept {
+    const BackendDescriptor* descriptor = find_backend_descriptor(backend);
+    return descriptor != nullptr ? descriptor->name : "unavailable";
+}
+
+bool backend_is_compiled(Backend backend) noexcept {
+    const BackendDescriptor* descriptor = find_backend_descriptor(backend);
+    return descriptor != nullptr && descriptor->compiled;
 }
 
 ExcodeIpTable resolve_excode_ip_table() {
-    if (cpu::has_avx512_core()) {
-        return {
-            excode_ipimpl::ip16_fxu1_avx512,
-            excode_ipimpl::ip16_fxu1_avx512,
-            excode_ipimpl::ip64_fxu2_avx512,
-            excode_ipimpl::ip64_fxu3_avx512,
-            excode_ipimpl::ip16_fxu4_avx512,
-            excode_ipimpl::ip64_fxu5_avx512,
-            excode_ipimpl::ip64_fxu6_avx512,
-            excode_ipimpl::ip64_fxu7_avx512,
-            excode_ipimpl::ip16_fxu8_avx512,
-        };
-    } else if (cpu::has_avx2()) {
-        return {
-            excode_ipimpl::ip16_fxu1_avx2,
-            excode_ipimpl::ip16_fxu1_avx2,
-            excode_ipimpl::ip64_fxu2_avx2,
-            excode_ipimpl::ip64_fxu3_avx2,
-            excode_ipimpl::ip16_fxu4_avx2,
-            excode_ipimpl::ip64_fxu5_avx2,
-            excode_ipimpl::ip64_fxu6_avx2,
-            excode_ipimpl::ip64_fxu7_avx2,
-            excode_ipimpl::ip16_fxu8_avx2,
-        };
-    } else {
-        missing_feature("excode ip functions");
-    }
+    return kDispatchTable.excode_ip;
 }
-
-using FlipSignFn = void (*)(const uint8_t*, float*, size_t);
-const FlipSignFn kFlipSignFn = [] {
-    if (cpu::has_avx512_core()) {
-        return flip_sign_avx512;
-    } else if (cpu::has_avx2()) {
-        return flip_sign_avx2;
-    } else {
-        missing_feature("sign flip");
-    }
-}();
-
-using KacsWalkFn = void (*)(float*, size_t);
-const KacsWalkFn kKacsWalkFn = [] {
-    if (cpu::has_avx512_core()) {
-        return kacs_walk_avx512;
-    } else if (cpu::has_avx2()) {
-        return kacs_walk_avx2;
-    } else {
-        missing_feature("FhtKacRotator");
-    }
-}();
-
-using ScalarQuantizeUint8Fn = void (*)(uint8_t*, const float*, size_t, float, float);
-const ScalarQuantizeUint8Fn kScalarQuantizeUint8Fn = [] {
-    if (cpu::has_avx512_core()) {
-        return scalar_quantize_uint8_avx512;
-    } else if (cpu::has_avx2()) {
-        return scalar_quantize_uint8_avx2;
-    } else {
-        missing_feature("uint8 quantize");
-    }
-}();
-
-using ScalarQuantizeUint16Fn = void (*)(uint16_t*, const float*, size_t, float, float);
-const ScalarQuantizeUint16Fn kScalarQuantizeUint16Fn = [] {
-    if (cpu::has_avx512_core()) {
-        return scalar_quantize_uint16_avx512;
-    } else if (cpu::has_avx2()) {
-        return scalar_quantize_uint16_avx2;
-    } else {
-        missing_feature("uint16 quantize");
-    }
-}();
-
-using PackExcodeFn = void (*)(const uint8_t*, uint8_t*, size_t);
-
-static PackExcodeFn resolve_pack_excode_fn(PackExcodeFn avx512_fn, PackExcodeFn avx2_fn) {
-    if (cpu::has_avx512_core()) {
-        return avx512_fn;
-    } else if (cpu::has_avx2()) {
-        return avx2_fn;
-    } else {
-        missing_feature("excode packing");
-    }
-}
-
-const PackExcodeFn kPacking2BitExcodeFn =
-    resolve_pack_excode_fn(packing_2bit_excode_avx512, packing_2bit_excode_avx2);
-const PackExcodeFn kPacking3BitExcodeFn =
-    resolve_pack_excode_fn(packing_3bit_excode_avx512, packing_3bit_excode_avx2);
-const PackExcodeFn kPacking4BitExcodeFn =
-    resolve_pack_excode_fn(packing_4bit_excode_avx512, packing_4bit_excode_avx2);
-const PackExcodeFn kPacking5BitExcodeFn =
-    resolve_pack_excode_fn(packing_5bit_excode_avx512, packing_5bit_excode_avx2);
-const PackExcodeFn kPacking6BitExcodeFn =
-    resolve_pack_excode_fn(packing_6bit_excode_avx512, packing_6bit_excode_avx2);
-const PackExcodeFn kPacking7BitExcodeFn =
-    resolve_pack_excode_fn(packing_7bit_excode_avx512, packing_7bit_excode_avx2);
 
 void flip_sign(const uint8_t* flip, float* data, size_t dim) {
-    kFlipSignFn(flip, data, dim);
+    kDispatchTable.flip_sign(flip, data, dim);
 }
 
 void kacs_walk(float* data, size_t len) {
-    kKacsWalkFn(data, len);
+    kDispatchTable.kacs_walk(data, len);
 }
 
 void scalar_quantize_uint8(
     uint8_t* result, const float* vec0, size_t dim, float lo, float delta
 ) {
-    kScalarQuantizeUint8Fn(result, vec0, dim, lo, delta);
+    kDispatchTable.quantize_uint8(result, vec0, dim, lo, delta);
 }
 
 void scalar_quantize_uint16(
     uint16_t* result, const float* vec0, size_t dim, float lo, float delta
 ) {
-    kScalarQuantizeUint16Fn(result, vec0, dim, lo, delta);
+    kDispatchTable.quantize_uint16(result, vec0, dim, lo, delta);
 }
 
-void packing_2bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
-    kPacking2BitExcodeFn(o_raw, o_compact, dim);
+void packing_2bit_excode(const uint8_t* raw, uint8_t* compact, size_t dim) {
+    kDispatchTable.pack_excode[2](raw, compact, dim);
 }
 
-void packing_3bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
-    kPacking3BitExcodeFn(o_raw, o_compact, dim);
+void packing_3bit_excode(const uint8_t* raw, uint8_t* compact, size_t dim) {
+    kDispatchTable.pack_excode[3](raw, compact, dim);
 }
 
-void packing_4bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
-    kPacking4BitExcodeFn(o_raw, o_compact, dim);
+void packing_4bit_excode(const uint8_t* raw, uint8_t* compact, size_t dim) {
+    kDispatchTable.pack_excode[4](raw, compact, dim);
 }
 
-void packing_5bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
-    kPacking5BitExcodeFn(o_raw, o_compact, dim);
+void packing_5bit_excode(const uint8_t* raw, uint8_t* compact, size_t dim) {
+    kDispatchTable.pack_excode[5](raw, compact, dim);
 }
 
-void packing_6bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
-    kPacking6BitExcodeFn(o_raw, o_compact, dim);
+void packing_6bit_excode(const uint8_t* raw, uint8_t* compact, size_t dim) {
+    kDispatchTable.pack_excode[6](raw, compact, dim);
 }
 
-void packing_7bit_excode(const uint8_t* o_raw, uint8_t* o_compact, size_t dim) {
-    kPacking7BitExcodeFn(o_raw, o_compact, dim);
+void packing_7bit_excode(const uint8_t* raw, uint8_t* compact, size_t dim) {
+    kDispatchTable.pack_excode[7](raw, compact, dim);
 }
 
 }  // namespace rabitqlib::simd
@@ -175,44 +452,10 @@ const ex_ipfunc kIp64Fxu5AvxFn = kExcodeIpTable[5];
 const ex_ipfunc kIp64Fxu6AvxFn = kExcodeIpTable[6];
 const ex_ipfunc kIp64Fxu7AvxFn = kExcodeIpTable[7];
 
-using NewTransposeBinFn = void (*)(const uint16_t*, uint64_t*, size_t, size_t);
-const NewTransposeBinFn kNewTransposeBinFn = [] {
-    if (cpu::has_avx512_core()) {
-        return simd::new_transpose_bin_avx512;
-    } else if (cpu::has_avx2()) {
-        return simd::new_transpose_bin_avx2;
-    } else {
-        simd::missing_feature("new transpose bin");
-    }
-}();
-
-using NewTransposeBin512Fn = void (*)(const uint8_t*, uint64_t*, size_t, size_t);
-const NewTransposeBin512Fn kNewTransposeBin512Fn = [] {
-    if (cpu::has_avx512_core()) {
-        return simd::new_transpose_bin_512_avx512;
-    } else if (cpu::has_avx2()) {
-        return simd::new_transpose_bin_512_avx2;
-    } else {
-        simd::missing_feature("new_transpose_bin_512");
-    }
-}();
-
-using MaskIpX0QFn = float (*)(const float*, const uint64_t*, size_t);
-const MaskIpX0QFn kMaskIpX0QFn = [] {
-    if (cpu::has_avx512_core()) {
-        return simd::mask_ip_x0_q_avx512;
-    } else if (cpu::has_avx2()) {
-        return simd::mask_ip_x0_q_avx2;
-    } else {
-        simd::missing_feature("mask ip x0 q");
-    }
-}();
-
 ex_ipfunc select_excode_ipfunc(size_t ex_bits) {
     if (ex_bits <= 8) {
         return kExcodeIpTable[ex_bits];
     }
-
     throw std::invalid_argument("Bad IP function for IVF");
 }
 
@@ -261,55 +504,22 @@ float excode_ipimpl::ip64_fxu7_avx(
 void new_transpose_bin(
     const uint16_t* q, uint64_t* tq, size_t padded_dim, size_t b_query
 ) {
-    kNewTransposeBinFn(q, tq, padded_dim, b_query);
+    simd::kDispatchTable.transpose_bin(q, tq, padded_dim, b_query);
 }
 
 void new_transpose_bin_512(
     const uint8_t* q, uint64_t* tq, size_t padded_dim, size_t b_query
 ) {
-    kNewTransposeBin512Fn(q, tq, padded_dim, b_query);
+    simd::kDispatchTable.transpose_bin_512(q, tq, padded_dim, b_query);
 }
 
 float mask_ip_x0_q(const float* query, const uint64_t* data, size_t padded_dim) {
-    return kMaskIpX0QFn(query, data, padded_dim);
+    return simd::kDispatchTable.mask_ip(query, data, padded_dim);
 }
 
 }  // namespace rabitqlib
 
 namespace rabitqlib::fastscan {
-
-using AccumulateFn = void (*)(const uint8_t*, const uint8_t*, uint16_t*, size_t);
-const AccumulateFn kAccumulateFn = [] {
-    if (cpu::has_avx512_core()) {
-        return simd::accumulate_avx512;
-    } else if (cpu::has_avx2()) {
-        return simd::accumulate_avx2;
-    } else {
-        rabitqlib::simd::missing_feature("fastscan accumulate");
-    }
-}();
-
-using TransferLutHaccFn = void (*)(const uint16_t*, size_t, uint8_t*);
-const TransferLutHaccFn kTransferLutHaccFn = [] {
-    if (cpu::has_avx512_core()) {
-        return simd::transfer_lut_hacc_avx512;
-    } else if (cpu::has_avx2()) {
-        return simd::transfer_lut_hacc_avx2;
-    } else {
-        rabitqlib::simd::missing_feature("fastscan high-accuracy LUT transfer");
-    }
-}();
-
-using AccumulateHaccFn = void (*)(const uint8_t*, const uint8_t*, int32_t*, size_t);
-const AccumulateHaccFn kAccumulateHaccFn = [] {
-    if (cpu::has_avx512_core()) {
-        return simd::accumulate_hacc_avx512;
-    } else if (cpu::has_avx2()) {
-        return simd::accumulate_hacc_avx2;
-    } else {
-        rabitqlib::simd::missing_feature("fastscan high-accuracy accumulate");
-    }
-}();
 
 void accumulate(
     const uint8_t* __restrict__ codes,
@@ -317,36 +527,25 @@ void accumulate(
     uint16_t* __restrict__ result,
     size_t dim
 ) {
-    kAccumulateFn(codes, lp_table, result, dim);
+    rabitqlib::simd::kDispatchTable.accumulate(codes, lp_table, result, dim);
 }
 
 void transfer_lut_hacc(const uint16_t* lut, size_t dim, uint8_t* hc_lut) {
-    kTransferLutHaccFn(lut, dim, hc_lut);
+    rabitqlib::simd::kDispatchTable.transfer_lut_hacc(lut, dim, hc_lut);
 }
 
 void accumulate_hacc(
     const uint8_t* __restrict__ codes,
     const uint8_t* __restrict__ hc_lut,
-    int32_t* accu_res,
+    int32_t* result,
     size_t dim
 ) {
-    kAccumulateHaccFn(codes, hc_lut, accu_res, dim);
+    rabitqlib::simd::kDispatchTable.accumulate_hacc(codes, hc_lut, result, dim);
 }
 
 }  // namespace rabitqlib::fastscan
 
 namespace rabitqlib {
-
-using WarmupIpX0Q512Fn = float (*)(const uint64_t*, const uint64_t*, float, float, size_t, size_t);
-const WarmupIpX0Q512Fn kWarmupIpX0Q512Fn = [] {
-    if (rabitqlib::cpu::has_avx512_popcnt()) {
-        return rabitqlib::simd::warmup_ip_x0_q_512_avx512;
-    } else if (rabitqlib::cpu::has_avx2()) {
-        return rabitqlib::simd::warmup_ip_x0_q_512_avx2;
-    } else {
-        rabitqlib::simd::missing_feature("warmup_ip_x0_q_512");
-    }
-}();
 
 float warmup_ip_x0_q_512(
     const uint64_t* data,
@@ -356,7 +555,9 @@ float warmup_ip_x0_q_512(
     size_t padded_dim,
     size_t b_query
 ) {
-    return kWarmupIpX0Q512Fn(data, query, delta, vl, padded_dim, b_query);
+    return simd::kDispatchTable.warmup_ip(
+        data, query, delta, vl, padded_dim, b_query
+    );
 }
 
 }  // namespace rabitqlib

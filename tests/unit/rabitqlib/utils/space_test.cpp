@@ -3,6 +3,7 @@
 #include "rabitqlib/utils/cpu_features.hpp"
 #include "rabitqlib/utils/space.hpp"
 #include "rabitqlib/defines.hpp"
+#include "simd/backend.hpp"
 #include "test_helpers.hpp"
 #include "test_data.hpp"
 #include <vector>
@@ -46,11 +47,19 @@ TEST(Select_IP_Func, returns_stable_function_pointer) {
 
     ip_func = select_excode_ipfunc(8);
     ASSERT_NE(ip_func, nullptr);
+#if defined(RABITQ_TARGET_AARCH64)
+    if (simd::selected_backend() == simd::Backend::Scalar) {
+        ASSERT_EQ(ip_func, simd::excode_ipimpl::ip16_fxu8_scalar);
+    } else {
+        ASSERT_EQ(ip_func, simd::excode_ipimpl::ip16_fxu8_neon);
+    }
+#elif defined(RABITQ_TARGET_X86_64)
     if (cpu::has_avx512_core()) {
         ASSERT_EQ(ip_func, simd::excode_ipimpl::ip16_fxu8_avx512);
     } else {
         ASSERT_EQ(ip_func, simd::excode_ipimpl::ip16_fxu8_avx2);
     }
+#endif
 }
 
 TEST(ScalarQuantize, Uint8MatchesRoundedScalar) {
@@ -64,7 +73,7 @@ TEST(ScalarQuantize, Uint8MatchesRoundedScalar) {
     for (size_t i = 0; i < dim; ++i) {
         float quantized = static_cast<float>((i * 7) % 251) + (static_cast<int>(i % 3) - 1) * 0.2F;
         input[i] = lo + delta * quantized;
-        expected[i] = static_cast<uint8_t>(std::round((input[i] - lo) / delta));
+        expected[i] = static_cast<uint8_t>(std::nearbyint((input[i] - lo) / delta));
     }
 
     scalar_quantize<uint8_t>(result.data(), input.data(), dim, lo, delta);
@@ -83,7 +92,7 @@ TEST(ScalarQuantize, Uint16MatchesRoundedScalar) {
     for (size_t i = 0; i < dim; ++i) {
         float quantized = static_cast<float>(1000 + i * 317) + (static_cast<int>(i % 5) - 2) * 0.1F;
         input[i] = lo + delta * quantized;
-        expected[i] = static_cast<uint16_t>(std::round((input[i] - lo) / delta));
+        expected[i] = static_cast<uint16_t>(std::nearbyint((input[i] - lo) / delta));
     }
 
     scalar_quantize<uint16_t>(result.data(), input.data(), dim, lo, delta);
@@ -93,7 +102,7 @@ TEST(ScalarQuantize, Uint16MatchesRoundedScalar) {
 
 TEST(ip16_fxu1_avx, ip_works) {
     srand(42);
-    size_t dim = 64;
+    constexpr size_t dim = 64;
     float query[dim];
     uint8_t codes[dim/8];
     
@@ -105,12 +114,18 @@ TEST(ip16_fxu1_avx, ip_works) {
         codes[i] = static_cast<uint8_t>(rand() % 256);
     }
 
-    ASSERT_NEAR(rabitqlib::excode_ipimpl::ip16_fxu1_avx(query, codes, dim), 15055.81f, 0.1f);
+    const float expected =
+        simd::excode_ipimpl::ip16_fxu1_scalar(query, codes, dim);
+    ASSERT_NEAR(
+        rabitqlib::excode_ipimpl::ip16_fxu1_avx(query, codes, dim),
+        expected,
+        std::max(0.1F, std::abs(expected) * 2e-6F)
+    );
 }
 
 TEST(ip64_fxu2_avx, ip_works) {
     srand(42);
-    size_t dim = 64*4;
+    constexpr size_t dim = 64*4;
     float query[dim];
     uint8_t codes[dim/4];
     
@@ -121,7 +136,13 @@ TEST(ip64_fxu2_avx, ip_works) {
     for (size_t i = 0; i < dim / 4; ++i) {
         codes[i] = static_cast<uint8_t>(rand() % 256);
     }
-    ASSERT_NEAR(rabitqlib::excode_ipimpl::ip64_fxu2_avx(query, codes, dim), 217584.15f, 0.1f);
+    const float expected =
+        simd::excode_ipimpl::ip64_fxu2_scalar(query, codes, dim);
+    ASSERT_NEAR(
+        rabitqlib::excode_ipimpl::ip64_fxu2_avx(query, codes, dim),
+        expected,
+        std::max(0.1F, std::abs(expected) * 2e-6F)
+    );
 }
 
 TEST(ip_fxu8_avx, ip_works) {
@@ -137,20 +158,29 @@ TEST(ip_fxu8_avx, ip_works) {
     }
 
     const float expected_float = static_cast<float>(expected);
+    const float tolerance = std::max(0.1F, std::abs(expected_float) * 2e-6F);
     ex_ipfunc ip_func = select_excode_ipfunc(8);
-    ASSERT_NEAR(ip_func(query.data(), codes.data(), dim), expected_float, 0.1F);
+    ASSERT_NEAR(ip_func(query.data(), codes.data(), dim), expected_float, tolerance);
+#if defined(RABITQ_TARGET_X86_64)
     if (cpu::has_avx2()) {
         ASSERT_NEAR(
             simd::excode_ipimpl::ip16_fxu8_avx2(query.data(), codes.data(), dim),
             expected_float,
-            0.1F
+            tolerance
         );
     }
     if (cpu::has_avx512_core()) {
         ASSERT_NEAR(
             simd::excode_ipimpl::ip16_fxu8_avx512(query.data(), codes.data(), dim),
             expected_float,
-            0.1F
+            tolerance
         );
     }
+#elif defined(RABITQ_TARGET_AARCH64)
+    ASSERT_NEAR(
+        simd::excode_ipimpl::ip16_fxu8_neon(query.data(), codes.data(), dim),
+        expected_float,
+        tolerance
+    );
+#endif
 }

@@ -3,6 +3,7 @@
 #include <limits>
 
 #include "rabitqlib/third/Eigen/Dense"
+#include "rabitqlib/utils/architecture.hpp"
 
 #define BIT_ID(x) (__builtin_popcount((x) - 1))
 #define LOWBIT(x) ((x) & (-(x)))

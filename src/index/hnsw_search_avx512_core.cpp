@@ -1,7 +1,7 @@
 #include "hnsw_search_avx2_kernels.hpp"
 #include "hnsw_search_avx512_kernels.hpp"
 
-#include "rabitqlib/index/hnsw/hnsw.hpp"
+#include "index/hnsw_search_backend.hpp"
 
 namespace rabitqlib::hnsw::detail {
 
@@ -27,7 +27,7 @@ struct HnswAvx512CoreKernel {
 maxheap<std::pair<float, PID>> search_knn_avx512_core(
     HierarchicalNSW& index, const float* rotated_query, size_t topk
 ) {
-    return index.search_knn_direct<HnswAvx512CoreKernel>(rotated_query, topk);
+    return HnswSearchAccess::search<HnswAvx512CoreKernel>(index, rotated_query, topk);
 }
 
 }  // namespace rabitqlib::hnsw::detail

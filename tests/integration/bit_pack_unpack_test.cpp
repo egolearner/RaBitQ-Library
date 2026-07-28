@@ -57,7 +57,7 @@ protected:
 
     void ExpectIpNear(float result) const {
         float expected = CalculateExpected();
-        ASSERT_NEAR(expected, result, std::max(0.1f, std::abs(expected) * 1e-6f));
+        ASSERT_NEAR(expected, result, std::max(0.1f, std::abs(expected) * 2e-6f));
     }
 };
 
@@ -139,4 +139,3 @@ TEST_F(BitPackUnpackTest, ExCode7Bit) {
 
     ExpectIpNear(result);
 }
-

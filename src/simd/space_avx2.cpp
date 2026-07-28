@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "rabitqlib/utils/space.hpp"
+#include "simd/quantize_utils.hpp"
 
 namespace rabitqlib::simd {
 
@@ -20,7 +21,10 @@ void scalar_quantize_uint8_avx2(
     for (; i < mul8; i += 8) {
         __m256 cur = _mm256_loadu_ps(&vec0[i]);
         cur = _mm256_mul_ps(_mm256_sub_ps(cur, lo256), od256);
-        __m256i i32 = _mm256_cvtps_epi32(cur);
+        cur = _mm256_round_ps(
+            cur, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC
+        );
+        __m256i i32 = _mm256_cvttps_epi32(cur);
         __m128i lo32 = _mm256_castsi256_si128(i32);
         __m128i hi32 = _mm256_extracti128_si256(i32, 1);
         __m128i i16 = _mm_packus_epi32(lo32, hi32);
@@ -28,7 +32,8 @@ void scalar_quantize_uint8_avx2(
         _mm_storel_epi64(reinterpret_cast<__m128i*>(&result[i]), i8);
     }
     for (; i < dim; ++i) {
-        result[i] = static_cast<uint8_t>(std::round((vec0[i] - lo) * one_over_delta));
+        result[i] =
+            detail::quantize_nearest_even<uint8_t>((vec0[i] - lo) * one_over_delta);
     }
 }
 
@@ -43,14 +48,18 @@ void scalar_quantize_uint16_avx2(
     for (; i < mul8; i += 8) {
         __m256 cur = _mm256_loadu_ps(&vec0[i]);
         cur = _mm256_mul_ps(_mm256_sub_ps(cur, lo256), ow256);
-        __m256i i32 = _mm256_cvtps_epi32(cur);
+        cur = _mm256_round_ps(
+            cur, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC
+        );
+        __m256i i32 = _mm256_cvttps_epi32(cur);
         __m128i lo32 = _mm256_castsi256_si128(i32);
         __m128i hi32 = _mm256_extracti128_si256(i32, 1);
         __m128i i16 = _mm_packus_epi32(lo32, hi32);
         _mm_storeu_si128(reinterpret_cast<__m128i*>(result + i), i16);
     }
     for (; i < dim; ++i) {
-        result[i] = static_cast<uint16_t>(std::round((vec0[i] - lo) * one_over_delta));
+        result[i] =
+            detail::quantize_nearest_even<uint16_t>((vec0[i] - lo) * one_over_delta);
     }
 }
 
