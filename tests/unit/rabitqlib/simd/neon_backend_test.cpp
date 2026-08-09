@@ -17,6 +17,8 @@
 
 #if defined(RABITQ_TARGET_AARCH64)
 
+#include "rabitqlib/utils/fht_neon.hpp"
+
 namespace {
 
 using rabitqlib::simd::excode_ipimpl::ip16_fxu1_neon;
@@ -115,6 +117,20 @@ void pack_one_bit(
     std::fill(compact.begin(), compact.end(), 0);
     for (size_t i = 0; i < raw.size(); ++i) {
         compact[i / 8] |= static_cast<uint8_t>((raw[i] & 1U) << (i % 8));
+    }
+}
+
+void scalar_fht(std::vector<float>& values) {
+    for (size_t half_span = 1; half_span < values.size(); half_span *= 2) {
+        const size_t span = half_span * 2;
+        for (size_t base = 0; base < values.size(); base += span) {
+            for (size_t offset = 0; offset < half_span; ++offset) {
+                const float left = values[base + offset];
+                const float right = values[base + half_span + offset];
+                values[base + offset] = left + right;
+                values[base + half_span + offset] = left - right;
+            }
+        }
     }
 }
 
@@ -307,6 +323,49 @@ TEST(NeonBackend, MaskAndWarmupMatchScalar) {
             data.data(), transposed.data(), 0.25F, -0.75F, dim, bits
         );
         EXPECT_FLOAT_EQ(neon_warmup, scalar_warmup) << "dim=" << dim;
+    }
+}
+
+TEST(NeonBackend, FhtMatchesScalarForEverySupportedSize) {
+    std::mt19937 rng(42);
+    std::uniform_real_distribution<float> distribution(-10.0F, 10.0F);
+    for (size_t log_size = 6; log_size <= 11; ++log_size) {
+        const size_t size = size_t{1} << log_size;
+        std::vector<float> expected(size);
+        for (float& value : expected) {
+            value = distribution(rng);
+        }
+        std::vector<float> actual = expected;
+        scalar_fht(expected);
+        switch (log_size) {
+            case 6:
+                rabitqlib::helper_float_6(actual.data());
+                break;
+            case 7:
+                rabitqlib::helper_float_7(actual.data());
+                break;
+            case 8:
+                rabitqlib::helper_float_8(actual.data());
+                break;
+            case 9:
+                rabitqlib::helper_float_9(actual.data());
+                break;
+            case 10:
+                rabitqlib::helper_float_10(actual.data());
+                break;
+            case 11:
+                rabitqlib::helper_float_11(actual.data());
+                break;
+            default:
+                FAIL() << "unsupported FHT size";
+        }
+        for (size_t i = 0; i < size; ++i) {
+            EXPECT_NEAR(
+                actual[i],
+                expected[i],
+                std::max(1e-5F, std::abs(expected[i]) * 1e-6F)
+            ) << "size=" << size << " lane=" << i;
+        }
     }
 }
 

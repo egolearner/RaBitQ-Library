@@ -20,9 +20,109 @@ int main() {
 
 #else
 
+#include "rabitqlib/utils/fht_neon.hpp"
+
 namespace {
 
 volatile double g_sink = 0.0;
+
+using IpFunction = float (*)(const float*, const uint8_t*, size_t);
+using PackFunction = void (*)(const uint8_t*, uint8_t*, size_t);
+using FhtFunction = void (*)(float*);
+
+IpFunction scalar_ip(size_t bits) {
+    static const std::array<IpFunction, 9> functions = {
+        rabitqlib::simd::excode_ipimpl::ip16_fxu1_scalar,
+        rabitqlib::simd::excode_ipimpl::ip16_fxu1_scalar,
+        rabitqlib::simd::excode_ipimpl::ip64_fxu2_scalar,
+        rabitqlib::simd::excode_ipimpl::ip64_fxu3_scalar,
+        rabitqlib::simd::excode_ipimpl::ip16_fxu4_scalar,
+        rabitqlib::simd::excode_ipimpl::ip64_fxu5_scalar,
+        rabitqlib::simd::excode_ipimpl::ip64_fxu6_scalar,
+        rabitqlib::simd::excode_ipimpl::ip64_fxu7_scalar,
+        rabitqlib::simd::excode_ipimpl::ip16_fxu8_scalar,
+    };
+    return functions.at(bits);
+}
+
+IpFunction neon_ip(size_t bits) {
+    static const std::array<IpFunction, 9> functions = {
+        rabitqlib::simd::excode_ipimpl::ip16_fxu1_neon,
+        rabitqlib::simd::excode_ipimpl::ip16_fxu1_neon,
+        rabitqlib::simd::excode_ipimpl::ip64_fxu2_neon,
+        rabitqlib::simd::excode_ipimpl::ip64_fxu3_neon,
+        rabitqlib::simd::excode_ipimpl::ip16_fxu4_neon,
+        rabitqlib::simd::excode_ipimpl::ip64_fxu5_neon,
+        rabitqlib::simd::excode_ipimpl::ip64_fxu6_neon,
+        rabitqlib::simd::excode_ipimpl::ip64_fxu7_neon,
+        rabitqlib::simd::excode_ipimpl::ip16_fxu8_neon,
+    };
+    return functions.at(bits);
+}
+
+PackFunction scalar_pack(size_t bits) {
+    static const std::array<PackFunction, 8> functions = {
+        nullptr,
+        nullptr,
+        rabitqlib::simd::packing_2bit_excode_scalar,
+        rabitqlib::simd::packing_3bit_excode_scalar,
+        rabitqlib::simd::packing_4bit_excode_scalar,
+        rabitqlib::simd::packing_5bit_excode_scalar,
+        rabitqlib::simd::packing_6bit_excode_scalar,
+        rabitqlib::simd::packing_7bit_excode_scalar,
+    };
+    return functions.at(bits);
+}
+
+PackFunction neon_pack(size_t bits) {
+    static const std::array<PackFunction, 8> functions = {
+        nullptr,
+        nullptr,
+        rabitqlib::simd::packing_2bit_excode_neon,
+        rabitqlib::simd::packing_3bit_excode_neon,
+        rabitqlib::simd::packing_4bit_excode_neon,
+        rabitqlib::simd::packing_5bit_excode_neon,
+        rabitqlib::simd::packing_6bit_excode_neon,
+        rabitqlib::simd::packing_7bit_excode_neon,
+    };
+    return functions.at(bits);
+}
+
+FhtFunction neon_fht(size_t size) {
+    switch (size) {
+        case 64:
+            return rabitqlib::helper_float_6;
+        case 256:
+            return rabitqlib::helper_float_8;
+        case 1024:
+            return rabitqlib::helper_float_10;
+        default:
+            return nullptr;
+    }
+}
+
+void pack_one_bit(
+    const std::vector<uint8_t>& raw, std::vector<uint8_t>& compact
+) {
+    std::fill(compact.begin(), compact.end(), 0);
+    for (size_t i = 0; i < raw.size(); ++i) {
+        compact[i / 8] |= static_cast<uint8_t>((raw[i] & 1U) << (i % 8));
+    }
+}
+
+void scalar_fht(float* values, size_t size) {
+    for (size_t half_span = 1; half_span < size; half_span *= 2) {
+        const size_t span = half_span * 2;
+        for (size_t base = 0; base < size; base += span) {
+            for (size_t offset = 0; offset < half_span; ++offset) {
+                const float left = values[base + offset];
+                const float right = values[base + half_span + offset];
+                values[base + offset] = left + right;
+                values[base + half_span + offset] = left - right;
+            }
+        }
+    }
+}
 
 template <typename Function>
 double median_nanoseconds(Function&& function, size_t iterations) {
@@ -73,17 +173,27 @@ int main() {
     std::mt19937_64 rng(42);
 
     std::vector<float> query(kDimension);
-    std::vector<uint8_t> code8(kDimension);
-    std::vector<uint8_t> code2_raw(kDimension);
     for (size_t i = 0; i < kDimension; ++i) {
         query[i] = static_cast<float>(static_cast<int64_t>(rng() % 2000) - 1000) / 101.0F;
-        code8[i] = static_cast<uint8_t>(rng());
-        code2_raw[i] = static_cast<uint8_t>(rng() & 3U);
     }
-    std::vector<uint8_t> code2(kDimension * 2 / 8);
-    rabitqlib::simd::packing_2bit_excode_scalar(
-        code2_raw.data(), code2.data(), kDimension
-    );
+    std::array<std::vector<uint8_t>, 9> raw_codes;
+    std::array<std::vector<uint8_t>, 9> compact_codes;
+    for (size_t bits = 1; bits <= 8; ++bits) {
+        raw_codes[bits].resize(kDimension);
+        compact_codes[bits].resize(kDimension * bits / 8);
+        for (uint8_t& value : raw_codes[bits]) {
+            value = static_cast<uint8_t>(rng() & ((1U << bits) - 1U));
+        }
+        if (bits == 1) {
+            pack_one_bit(raw_codes[bits], compact_codes[bits]);
+        } else if (bits == 8) {
+            compact_codes[bits] = raw_codes[bits];
+        } else {
+            scalar_pack(bits)(
+                raw_codes[bits].data(), compact_codes[bits].data(), kDimension
+            );
+        }
+    }
 
     std::vector<uint64_t> binary_data(kDimension / 64);
     for (uint64_t& value : binary_data) {
@@ -97,6 +207,10 @@ int main() {
     rabitqlib::simd::new_transpose_bin_512_scalar(
         integer_query.data(), transposed.data(), kDimension, kBits
     );
+    std::vector<uint16_t> integer_query16(
+        integer_query.begin(), integer_query.end()
+    );
+    std::vector<uint64_t> transpose_result(kDimension / 64 * kBits);
 
     constexpr size_t kNumVectors = 32;
     std::vector<uint8_t> binary_codes(kNumVectors * kDimension / 8);
@@ -120,42 +234,27 @@ int main() {
 
     std::array<uint16_t, 32> fastscan_result{};
     std::array<int32_t, 32> fastscan_hacc_result{};
-    std::vector<uint8_t> packed7(kDimension * 7 / 8);
-    std::vector<uint8_t> raw7(kDimension);
-    for (uint8_t& value : raw7) {
-        value = static_cast<uint8_t>(rng() & 127U);
-    }
-
     std::cout << "kernel                         scalar ns/op    NEON ns/op     speedup\n";
     bool passed = true;
-    passed &= compare(
-        "excode 8-bit inner product",
-        [&](size_t) {
-            g_sink += rabitqlib::simd::excode_ipimpl::ip16_fxu8_scalar(
-                query.data(), code8.data(), kDimension
-            );
-        },
-        [&](size_t) {
-            g_sink += rabitqlib::simd::excode_ipimpl::ip16_fxu8_neon(
-                query.data(), code8.data(), kDimension
-            );
-        },
-        20000
-    );
-    passed &= compare(
-        "excode 2-bit inner product",
-        [&](size_t) {
-            g_sink += rabitqlib::simd::excode_ipimpl::ip64_fxu2_scalar(
-                query.data(), code2.data(), kDimension
-            );
-        },
-        [&](size_t) {
-            g_sink += rabitqlib::simd::excode_ipimpl::ip64_fxu2_neon(
-                query.data(), code2.data(), kDimension
-            );
-        },
-        15000
-    );
+    for (size_t bits = 1; bits <= 8; ++bits) {
+        const IpFunction scalar_function = scalar_ip(bits);
+        const IpFunction neon_function = neon_ip(bits);
+        const size_t iterations = bits == 8 ? 20000 : 12000;
+        passed &= compare(
+            "excode " + std::to_string(bits) + "-bit inner product",
+            [&, bits, scalar_function](size_t) {
+                g_sink += scalar_function(
+                    query.data(), compact_codes[bits].data(), kDimension
+                );
+            },
+            [&, bits, neon_function](size_t) {
+                g_sink += neon_function(
+                    query.data(), compact_codes[bits].data(), kDimension
+                );
+            },
+            iterations
+        );
+    }
     passed &= compare(
         "mask inner product",
         [&](size_t) {
@@ -183,6 +282,50 @@ int main() {
             );
         },
         25000
+    );
+    passed &= compare(
+        "transpose uint16",
+        [&](size_t iteration) {
+            rabitqlib::simd::new_transpose_bin_scalar(
+                integer_query16.data(),
+                transpose_result.data(),
+                kDimension,
+                kBits
+            );
+            g_sink += transpose_result[iteration % transpose_result.size()];
+        },
+        [&](size_t iteration) {
+            rabitqlib::simd::new_transpose_bin_neon(
+                integer_query16.data(),
+                transpose_result.data(),
+                kDimension,
+                kBits
+            );
+            g_sink += transpose_result[iteration % transpose_result.size()];
+        },
+        3000
+    );
+    passed &= compare(
+        "transpose uint8/512",
+        [&](size_t iteration) {
+            rabitqlib::simd::new_transpose_bin_512_scalar(
+                integer_query.data(),
+                transpose_result.data(),
+                kDimension,
+                kBits
+            );
+            g_sink += transpose_result[iteration % transpose_result.size()];
+        },
+        [&](size_t iteration) {
+            rabitqlib::simd::new_transpose_bin_512_neon(
+                integer_query.data(),
+                transpose_result.data(),
+                kDimension,
+                kBits
+            );
+            g_sink += transpose_result[iteration % transpose_result.size()];
+        },
+        3000
     );
     passed &= compare(
         "FastScan accumulate",
@@ -222,22 +365,63 @@ int main() {
         },
         8000
     );
-    passed &= compare(
-        "7-bit packing",
-        [&](size_t iteration) {
-            rabitqlib::simd::packing_7bit_excode_scalar(
-                raw7.data(), packed7.data(), kDimension
-            );
-            g_sink += packed7[iteration % packed7.size()];
-        },
-        [&](size_t iteration) {
-            rabitqlib::simd::packing_7bit_excode_neon(
-                raw7.data(), packed7.data(), kDimension
-            );
-            g_sink += packed7[iteration % packed7.size()];
-        },
-        20000
-    );
+    for (size_t bits : {size_t{3}, size_t{5}, size_t{7}}) {
+        const PackFunction scalar_function = scalar_pack(bits);
+        const PackFunction neon_function = neon_pack(bits);
+        passed &= compare(
+            std::to_string(bits) + "-bit packing",
+            [&, bits, scalar_function](size_t iteration) {
+                scalar_function(
+                    raw_codes[bits].data(),
+                    compact_codes[bits].data(),
+                    kDimension
+                );
+                g_sink += compact_codes[bits][
+                    iteration % compact_codes[bits].size()
+                ];
+            },
+            [&, bits, neon_function](size_t iteration) {
+                neon_function(
+                    raw_codes[bits].data(),
+                    compact_codes[bits].data(),
+                    kDimension
+                );
+                g_sink += compact_codes[bits][
+                    iteration % compact_codes[bits].size()
+                ];
+            },
+            12000
+        );
+    }
+    for (size_t size : {size_t{64}, size_t{256}, size_t{1024}}) {
+        std::vector<float> fht_source(size);
+        for (float& value : fht_source) {
+            value = static_cast<float>(
+                static_cast<int64_t>(rng() % 2000) - 1000
+            ) / 1000.0F;
+        }
+        std::vector<float> scalar_work = fht_source;
+        std::vector<float> neon_work = fht_source;
+        const FhtFunction neon_function = neon_fht(size);
+        passed &= compare(
+            "FHT " + std::to_string(size),
+            [&, size](size_t iteration) {
+                if ((iteration & 15U) == 0) {
+                    scalar_work = fht_source;
+                }
+                scalar_fht(scalar_work.data(), size);
+                g_sink += scalar_work[iteration % size];
+            },
+            [&, size, neon_function](size_t iteration) {
+                if ((iteration & 15U) == 0) {
+                    neon_work = fht_source;
+                }
+                neon_function(neon_work.data());
+                g_sink += neon_work[iteration % size];
+            },
+            size == 1024 ? 2000 : 5000
+        );
+    }
 
     if (!passed) {
         std::cerr << "A NEON kernel was more than 10% slower than its scalar oracle\n";

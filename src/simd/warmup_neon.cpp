@@ -8,13 +8,26 @@ namespace rabitqlib::simd {
 namespace {
 
 size_t popcount_words_neon(const uint64_t* words, size_t count) {
-    size_t result = 0;
+    uint32x4_t accumulator = vdupq_n_u32(0);
     size_t i = 0;
-    for (; i + 2 <= count; i += 2) {
+    for (; i + 4 <= count; i += 4) {
+        const uint8x16_t bytes0 =
+            vld1q_u8(reinterpret_cast<const uint8_t*>(words + i));
+        const uint8x16_t bytes1 =
+            vld1q_u8(reinterpret_cast<const uint8_t*>(words + i + 2));
+        accumulator =
+            vpadalq_u16(accumulator, vpaddlq_u8(vcntq_u8(bytes0)));
+        accumulator =
+            vpadalq_u16(accumulator, vpaddlq_u8(vcntq_u8(bytes1)));
+    }
+    if (i + 2 <= count) {
         const uint8x16_t bytes =
             vld1q_u8(reinterpret_cast<const uint8_t*>(words + i));
-        result += static_cast<size_t>(vaddlvq_u8(vcntq_u8(bytes)));
+        accumulator =
+            vpadalq_u16(accumulator, vpaddlq_u8(vcntq_u8(bytes)));
+        i += 2;
     }
+    size_t result = static_cast<size_t>(vaddlvq_u32(accumulator));
     for (; i < count; ++i) {
         result += static_cast<size_t>(__builtin_popcountll(words[i]));
     }
@@ -24,17 +37,36 @@ size_t popcount_words_neon(const uint64_t* words, size_t count) {
 size_t popcount_and_words_neon(
     const uint64_t* left, const uint64_t* right, size_t count
 ) {
-    size_t result = 0;
+    uint32x4_t accumulator = vdupq_n_u32(0);
     size_t i = 0;
-    for (; i + 2 <= count; i += 2) {
+    for (; i + 4 <= count; i += 4) {
+        const uint8x16_t left0 =
+            vld1q_u8(reinterpret_cast<const uint8_t*>(left + i));
+        const uint8x16_t right0 =
+            vld1q_u8(reinterpret_cast<const uint8_t*>(right + i));
+        const uint8x16_t left1 =
+            vld1q_u8(reinterpret_cast<const uint8_t*>(left + i + 2));
+        const uint8x16_t right1 =
+            vld1q_u8(reinterpret_cast<const uint8_t*>(right + i + 2));
+        accumulator = vpadalq_u16(
+            accumulator, vpaddlq_u8(vcntq_u8(vandq_u8(left0, right0)))
+        );
+        accumulator = vpadalq_u16(
+            accumulator, vpaddlq_u8(vcntq_u8(vandq_u8(left1, right1)))
+        );
+    }
+    if (i + 2 <= count) {
         const uint8x16_t left_bytes =
             vld1q_u8(reinterpret_cast<const uint8_t*>(left + i));
         const uint8x16_t right_bytes =
             vld1q_u8(reinterpret_cast<const uint8_t*>(right + i));
-        result += static_cast<size_t>(
-            vaddlvq_u8(vcntq_u8(vandq_u8(left_bytes, right_bytes)))
+        accumulator = vpadalq_u16(
+            accumulator,
+            vpaddlq_u8(vcntq_u8(vandq_u8(left_bytes, right_bytes)))
         );
+        i += 2;
     }
+    size_t result = static_cast<size_t>(vaddlvq_u32(accumulator));
     for (; i < count; ++i) {
         result += static_cast<size_t>(__builtin_popcountll(left[i] & right[i]));
     }

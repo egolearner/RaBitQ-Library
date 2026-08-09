@@ -4,20 +4,14 @@
 
 #include <algorithm>
 
-#include "simd/reference_kernels.hpp"
-
 namespace rabitqlib::fastscan::simd {
 namespace {
 
 void store_permuted_u16(
     uint16x8_t low, uint16x8_t high, uint16_t* result
 ) {
-    uint16_t lanes[16];
-    vst1q_u16(lanes, low);
-    vst1q_u16(lanes + 8, high);
-    for (size_t i = 0; i < 16; ++i) {
-        result[rabitqlib::simd::reference::kFastScanPermutation[i]] = lanes[i];
-    }
+    vst1q_u16(result, vuzp1q_u16(low, high));
+    vst1q_u16(result + 8, vuzp2q_u16(low, high));
 }
 
 void accumulate_u16x8_to_u32(
@@ -30,15 +24,22 @@ void accumulate_u16x8_to_u32(
 void store_permuted_u32(
     const uint32x4_t* accumulators, int32_t* result
 ) {
-    uint32_t lanes[16];
-    vst1q_u32(lanes, accumulators[0]);
-    vst1q_u32(lanes + 4, accumulators[1]);
-    vst1q_u32(lanes + 8, accumulators[2]);
-    vst1q_u32(lanes + 12, accumulators[3]);
-    for (size_t i = 0; i < 16; ++i) {
-        result[rabitqlib::simd::reference::kFastScanPermutation[i]] =
-            static_cast<int32_t>(lanes[i]);
-    }
+    vst1q_s32(
+        result,
+        vreinterpretq_s32_u32(vuzp1q_u32(accumulators[0], accumulators[1]))
+    );
+    vst1q_s32(
+        result + 4,
+        vreinterpretq_s32_u32(vuzp1q_u32(accumulators[2], accumulators[3]))
+    );
+    vst1q_s32(
+        result + 8,
+        vreinterpretq_s32_u32(vuzp2q_u32(accumulators[0], accumulators[1]))
+    );
+    vst1q_s32(
+        result + 12,
+        vreinterpretq_s32_u32(vuzp2q_u32(accumulators[2], accumulators[3]))
+    );
 }
 
 }  // namespace
